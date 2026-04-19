@@ -1,0 +1,48 @@
+        ┌──────────────────────────────┐
+        │        SHAREPOINT            │
+        │   (Source / Raw Files)       │
+        │   - HC files                 │
+        │   - Rollup files             │
+        │   - Mapping files            │
+        └──────────────┬───────────────┘
+                       ↓  (ingestion)
+        ┌──────────────────────────────┐
+        │   DATASET (in Dataiku DSS)   │
+        │   - Raw tables created       │
+        │   - No modification yet      │
+        └──────────────┬───────────────┘
+                       ↓
+        ┌──────────────────────────────┐
+        │   PREPARE RECIPE (DSS)       │
+        │   - Cleaning                 │
+        │   - Filtering                │
+        │   - Formatting               │
+        │   👉 Processing happens here │
+        └──────────────┬───────────────┘
+                       ↓
+        ┌──────────────────────────────┐
+        │   JOIN RECIPE (DSS)          │
+        │   - HC + Mapping             │
+        │   - Rollup + HC              │
+        │   👉 Data integration        │
+        └──────────────┬───────────────┘
+                       ↓
+        ┌──────────────────────────────┐
+        │ TRANSFORM LOGIC (DSS)        │
+        │ - Split calculations         │
+        │ - Business rules             │
+        │ 👉 Core processing layer     │
+        └──────────────┬───────────────┘
+                       ↓
+        ┌──────────────────────────────┐
+        │ FINAL DATASET (in DSS)       │
+        │ - Ready-to-use output        │
+        │ - Clean structured data      │
+        └──────────────┬───────────────┘
+                       ↓  (export)
+        ┌──────────────────────────────┐
+        │        SHAREPOINT            │
+        │   (Output / Reports Folder)  │
+        │   - Final HC report          │
+        │   - Month-end split output   │
+        └──────────────────────────────┘
