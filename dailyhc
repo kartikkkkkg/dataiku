@@ -1,64 +1,42 @@
 import dataiku
 import pandas as pd
 import numpy as np
-from collections import defaultdict
 
-# ===============================
-# LOAD DATASETS (DATAIKU)
-# ===============================
+# ================================
+# LOAD DATASETS (Dataiku)
+# ================================
 hc_curr_raw = dataiku.Dataset("hc_current_clean").get_dataframe()
 hc_last_raw = dataiku.Dataset("hc_last_clean").get_dataframe()
 mapping = dataiku.Dataset("mapping").get_dataframe()
 rollup = dataiku.Dataset("rollup").get_dataframe()
 
-# ===============================
+# ================================
 # CLEAN COLUMN NAMES (VERY IMPORTANT)
-# ===============================
-for df in [hc_curr_raw, hc_last_raw, mapping, rollup]:
-    df.columns = df.columns.str.strip()
+# ================================
+hc_curr_raw.columns = hc_curr_raw.columns.str.strip()
+hc_last_raw.columns = hc_last_raw.columns.str.strip()
+mapping.columns = mapping.columns.str.strip()
+rollup.columns = rollup.columns.str.strip()
 
-# ===============================
-# AUTO COLUMN DETECTION (NO MORE ERRORS)
-# ===============================
-def find_col(df, keyword):
-    for c in df.columns:
-        if keyword.lower() in c.lower():
-            return c
-    raise Exception(f"{keyword} not found in {df.columns}")
+# ================================
+# COLUMN DEFINITIONS (EDIT ONLY IF NEEDED)
+# ================================
+COL_BANK_ID = "Bank ID"
+COL_BF_L6 = "Business Function Lvl 6"
+COL_EMP_TYPE = "Employment Type"
+COL_FTE = "FTE"
 
-COL_BANK_ID = find_col(hc_curr_raw, "bank")
-COL_BF_L6 = find_col(hc_curr_raw, "function")
-COL_EMP_TYPE = find_col(hc_curr_raw, "employment")
-COL_FTE = find_col(hc_curr_raw, "fte")
+COL_COST_CAT = "Cost Cat"
+COL_MT_DOMAIN = "MT Domain"
+COL_MT1_DOMAIN = "MT-1 Domain"
+COL_CONTR = "Contr/Non-Contr"
 
-COL_COST_CAT = find_col(mapping, "cost")
-COL_MT_DOMAIN = find_col(mapping, "mt domain")
-COL_MT1_DOMAIN = find_col(mapping, "mt-1")
-COL_CONTR = find_col(mapping, "contr")
+COL_ROLLUP_ID = "Employee ID"
+COL_ROLLUP_GBF = "Global Business Function"
 
-COL_ROLLUP_ID = find_col(rollup, "employee")
-COL_ROLLUP_GBF = find_col(rollup, "global")
-
-# ===============================
-# CONSTANTS
-# ===============================
-CONTR_CONT = "Controllable"
-
-COST_CAT_ORDER = ["BAU", "CIO Mgmt", "TPS", "Proj"]
-
-TOTAL_LABELS = {
-    "BAU": "BAU TOTAL",
-    "CIO Mgmt": "CIO MGMT TOTAL",
-    "TPS": "TPS TOTAL",
-    "Proj": "PROJ TOTAL",
-}
-
-GRAND_TOTAL_LABEL = "GRAND TOTAL"
-COMMENT_THRESHOLD = 10
-
-# ===============================
-# MAPPING
-# ===============================
+# ================================
+# APPLY MAPPING
+# ================================
 bf_map = mapping[[COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN]].drop_duplicates()
 emp_map = mapping[[COL_EMP_TYPE, COL_CONTR]].drop_duplicates()
 
@@ -77,32 +55,25 @@ def apply_mapping(df):
 hc_curr = apply_mapping(hc_curr_raw)
 hc_last = apply_mapping(hc_last_raw)
 
-# ===============================
-# SNAPSHOT
-# ===============================
+# ================================
+# SNAPSHOTS
+# ================================
 def snapshot(df, suffix):
+    cols = [COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, COL_EMP_TYPE, "ContrFlag", COL_FTE]
+    df = df[cols].copy()
     df = df.sort_values(COL_BANK_ID).drop_duplicates(COL_BANK_ID, keep="last")
     df = df.add_suffix("_" + suffix)
     df.rename(columns={COL_BANK_ID + "_" + suffix: COL_BANK_ID}, inplace=True)
     return df
 
-snap_curr = snapshot(hc_curr, "curr")
-snap_last = snapshot(hc_last, "last")
+curr = snapshot(hc_curr, "curr")
+last = snapshot(hc_last, "last")
 
-# ===============================
-# ROLLUP
-# ===============================
-rollup_ids = set(rollup[COL_ROLLUP_ID].astype(str))
-rollup_gbf_map = dict(zip(rollup[COL_ROLLUP_ID].astype(str), rollup[COL_ROLLUP_GBF]))
+combined = last.merge(curr, on=COL_BANK_ID, how="outer")
 
-# ===============================
-# COMBINE
-# ===============================
-combined = snap_last.merge(snap_curr, on=COL_BANK_ID, how="outer")
-
-# ===============================
+# ================================
 # MOVEMENTS
-# ===============================
+# ================================
 rows = []
 
 for _, r in combined.iterrows():
@@ -111,83 +82,56 @@ for _, r in combined.iterrows():
     has_last = pd.notna(r.get("MT_CC_last"))
     has_curr = pd.notna(r.get("MT_CC_curr"))
 
+    fte_last = r.get("FTE_last", 0)
+    fte_curr = r.get("FTE_curr", 0)
+
     if has_curr and not has_last:
-        move = "Non TnO Joiners" if bid in rollup_ids else "New Joiners"
-        rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], move, r[COL_FTE+"_curr"]])
+        rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], "Joiner", fte_curr])
 
     elif has_last and not has_curr:
-        if bid in rollup_gbf_map:
-            move = "TnO Leavers"
-        else:
-            move = "Left Bank"
-        rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], move, r[COL_FTE+"_last"]])
+        rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], "Leaver", fte_last])
 
     elif has_last and has_curr:
         if r["MT_CC_last"] != r["MT_CC_curr"]:
-            rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], "Transfer out", r[COL_FTE+"_last"]])
-            rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], "Transfer in", r[COL_FTE+"_curr"]])
+            rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], "Transfer In", fte_curr])
+            rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], "Transfer Out", fte_last])
 
 movements = pd.DataFrame(rows, columns=[
     COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement", "FTE"
 ])
 
-# ===============================
-# COMMENTS
-# ===============================
-comment_text = (
-    movements.groupby("MT_CC")["Movement"]
-    .apply(lambda x: ", ".join(x))
-    .reset_index(name="Comments")
-)
-
-# ===============================
+# ================================
 # SUMMARY
-# ===============================
-curr_sum = hc_curr.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]).agg(HC_Current=(COL_FTE,"sum")).reset_index()
-last_sum = hc_last.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]).agg(HC_Last=(COL_FTE,"sum")).reset_index()
+# ================================
+curr_sum = hc_curr.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"])\
+    .agg(HC_Current=(COL_FTE, "sum")).reset_index()
 
-summary = curr_sum.merge(last_sum, on=[COL_COST_CAT, COL_MT_DOMAIN,"MT_CC"], how="outer").fillna(0)
+last_sum = hc_last.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"])\
+    .agg(HC_Last=(COL_FTE, "sum")).reset_index()
+
+summary = curr_sum.merge(last_sum, on=[COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"], how="outer").fillna(0)
 
 summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
 
-summary = summary.merge(comment_text, on="MT_CC", how="left").fillna("")
+# ================================
+# COMMENTS (simple version)
+# ================================
+comments = movements.groupby("MT_CC")["Movement"].apply(lambda x: ", ".join(x)).reset_index()
+comments.columns = ["MT_CC", "Comments"]
 
-summary.loc[summary["Net Change"].abs() <= COMMENT_THRESHOLD, "Comments"] = ""
+summary = summary.merge(comments, on="MT_CC", how="left").fillna("")
 
-# ===============================
-# TOTALS
-# ===============================
-final = []
-for cat in COST_CAT_ORDER:
-    block = summary[summary[COL_COST_CAT] == cat]
-    if block.empty:
-        continue
-    final.append(block)
+# ================================
+# FINAL CLEAN
+# ================================
+summary["HC_Current"] = summary["HC_Current"].round(0).astype(int)
+summary["HC_Last"] = summary["HC_Last"].round(0).astype(int)
+summary["Net Change"] = summary["Net Change"].round(0).astype(int)
 
-    final.append(pd.DataFrame([{
-        COL_COST_CAT: TOTAL_LABELS[cat],
-        COL_MT_DOMAIN: "",
-        "HC_Current": block["HC_Current"].sum(),
-        "HC_Last": block["HC_Last"].sum(),
-        "Net Change": block["Net Change"].sum(),
-        "Comments": ""
-    }]))
+final = summary[[COL_COST_CAT, COL_MT_DOMAIN, "HC_Last", "HC_Current", "Net Change", "Comments"]]
 
-grand = pd.DataFrame([{
-    COL_COST_CAT: GRAND_TOTAL_LABEL,
-    COL_MT_DOMAIN: "",
-    "HC_Current": summary["HC_Current"].sum(),
-    "HC_Last": summary["HC_Last"].sum(),
-    "Net Change": summary["Net Change"].sum(),
-    "Comments": ""
-}])
-
-final_df = pd.concat(final + [grand], ignore_index=True)
-
-# ===============================
-# OUTPUT
-# ===============================
+# ================================
+# OUTPUT TO DATAIKU
+# ================================
 output = dataiku.Dataset("HC_Output")
-output.write_with_schema(final_df)
-
-print("✅ FULL DATAIKU PIPELINE SUCCESS")
+output.write_with_schema(final)
