@@ -1,175 +1,233 @@
 import dataiku
 import pandas as pd
+import numpy as np
+from collections import defaultdict
 
 # ==============================
-# LOAD DATA
+# LOAD DATASETS
 # ==============================
-hc_current = dataiku.Dataset("hc_current_clean").get_dataframe()
-hc_last = dataiku.Dataset("hc_last_clean").get_dataframe()
+hc_curr_raw = dataiku.Dataset("hc_current_clean").get_dataframe()
+hc_last_raw = dataiku.Dataset("hc_last_clean").get_dataframe()
 mapping = dataiku.Dataset("mapping").get_dataframe()
+rollup = dataiku.Dataset("rollup").get_dataframe()
+
+# ==============================
+# COLUMN CONFIG (STRICT)
+# ==============================
+COL_BANK_ID = "Bank ID"
+COL_BF_L6 = "Business Function Lvl 6"
+COL_EMP_TYPE = "Employment Type"
+COL_FTE = "FTE"
+
+COL_COST_CAT = "Cost Cat"
+COL_MT_DOMAIN = "MT Domain"
+COL_MT1_DOMAIN = "MT-1 Domain"
+COL_CONTR = "Contr/Non-Contr"
+
+COL_ROLLUP_ID = "Employee ID"
+COL_ROLLUP_GBF = "Global Business Function"
+
+CONTR_CONT = "Controllable"
+CONTR_NON = "Non-Controllable"
 
 # ==============================
 # CLEAN COLUMNS
 # ==============================
-for df in [hc_current, hc_last, mapping]:
+for df in [hc_curr_raw, hc_last_raw, mapping, rollup]:
     df.columns = df.columns.str.strip()
 
 # ==============================
-# SPLIT MAPPING
+# BUILD MAPPING TABLES
 # ==============================
-bf_map = mapping[[
-    "Business Function Lvl 6",
-    "Cost Cat",
-    "MT Domain"
-]].dropna(subset=["Business Function Lvl 6"])
+bf_map = mapping[
+    [COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN]
+].drop_duplicates()
 
-emp_map = mapping[[
-    "Employment Type",
-    "Contr/Non-Contr"
-]].dropna(subset=["Employment Type"])
-
-# ==============================
-# NORMALIZE KEYS
-# ==============================
-def clean(x):
-    return x.astype(str).str.strip().str.lower()
-
-for df in [hc_current, hc_last]:
-    df["Business Function Lvl 6"] = clean(df["Business Function Lvl 6"])
-    df["Employment Type"] = clean(df["Employment Type"])
-
-bf_map["Business Function Lvl 6"] = clean(bf_map["Business Function Lvl 6"])
-emp_map["Employment Type"] = clean(emp_map["Employment Type"])
+emp_map = mapping[
+    [COL_EMP_TYPE, COL_CONTR]
+].drop_duplicates()
 
 # ==============================
 # APPLY MAPPING
 # ==============================
-hc_current = hc_current.merge(bf_map, on="Business Function Lvl 6", how="left")
-hc_last = hc_last.merge(bf_map, on="Business Function Lvl 6", how="left")
+def apply_mapping(df):
+    df = df[[COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE, COL_FTE]].copy()
+    df[COL_BANK_ID] = df[COL_BANK_ID].astype(str).str.strip()
 
-hc_current = hc_current.merge(emp_map, on="Employment Type", how="left")
-hc_last = hc_last.merge(emp_map, on="Employment Type", how="left")
+    df = df.merge(bf_map, on=COL_BF_L6, how="left")
+    df = df.merge(emp_map, on=COL_EMP_TYPE, how="left")
+
+    df.rename(columns={COL_CONTR: "ContrFlag"}, inplace=True)
+
+    df["MT_CC"] = df[COL_MT_DOMAIN].astype(str) + "-" + df[COL_COST_CAT].astype(str)
+
+    return df
+
+hc_curr = apply_mapping(hc_curr_raw)
+hc_last = apply_mapping(hc_last_raw)
 
 # ==============================
-# HANDLE MISSING
+# SNAPSHOTS
 # ==============================
-for df in [hc_current, hc_last]:
-    df["Cost Cat"] = df["Cost Cat"].fillna("UNKNOWN")
-    df["MT Domain"] = df["MT Domain"].fillna("UNKNOWN")
+def build_snapshot(df, suffix):
+    cols = [
+        COL_BANK_ID,
+        "MT_CC",
+        COL_COST_CAT,
+        COL_MT_DOMAIN,
+        COL_EMP_TYPE,
+        "ContrFlag",
+        COL_FTE,
+    ]
+
+    snap = df[cols].copy()
+    snap = snap.sort_values(COL_BANK_ID).drop_duplicates(COL_BANK_ID, keep="last")
+    snap = snap.add_suffix(f"_{suffix}")
+    snap.rename(columns={f"{COL_BANK_ID}_{suffix}": COL_BANK_ID}, inplace=True)
+
+    return snap
+
+snap_curr = build_snapshot(hc_curr, "curr")
+snap_last = build_snapshot(hc_last, "last")
 
 # ==============================
-# GROUP SUMMARY
+# ROLLUP
 # ==============================
-group_cols = ["Cost Cat", "MT Domain"]
+rollup[COL_ROLLUP_ID] = rollup[COL_ROLLUP_ID].astype(str).str.strip()
+
+rollup_ids = set(rollup[COL_ROLLUP_ID].dropna())
+
+rollup_gbf_map = dict(
+    zip(rollup[COL_ROLLUP_ID], rollup[COL_ROLLUP_GBF])
+)
+
+# ==============================
+# COMBINE
+# ==============================
+combined = snap_last.merge(
+    snap_curr,
+    on=COL_BANK_ID,
+    how="outer"
+)
+
+# ==============================
+# MOVEMENTS
+# ==============================
+rows = []
+
+for _, r in combined.iterrows():
+    bid = r[COL_BANK_ID]
+
+    has_last = pd.notna(r.get("MT_CC_last"))
+    has_curr = pd.notna(r.get("MT_CC_curr"))
+
+    if has_curr and not has_last:
+        movement = "New Joiners" if bid not in rollup_ids else "Non TnO Joiners"
+
+        rows.append({
+            "MT_CC": r["MT_CC_curr"],
+            COL_COST_CAT: r[f"{COL_COST_CAT}_curr"],
+            COL_MT_DOMAIN: r[f"{COL_MT_DOMAIN}_curr"],
+            "Movement": movement,
+            "FTE": r[f"{COL_FTE}_curr"],
+            "ContrSide": r["ContrFlag_curr"]
+        })
+
+    elif has_last and not has_curr:
+        if bid in rollup_gbf_map:
+            movement = "TnO Leavers"
+        else:
+            movement = "Left Bank"
+
+        rows.append({
+            "MT_CC": r["MT_CC_last"],
+            COL_COST_CAT: r[f"{COL_COST_CAT}_last"],
+            COL_MT_DOMAIN: r[f"{COL_MT_DOMAIN}_last"],
+            "Movement": movement,
+            "FTE": r[f"{COL_FTE}_last"],
+            "ContrSide": r["ContrFlag_last"]
+        })
+
+    elif has_last and has_curr:
+        if r["MT_CC_last"] != r["MT_CC_curr"]:
+            rows.append({
+                "MT_CC": r["MT_CC_last"],
+                COL_COST_CAT: r[f"{COL_COST_CAT}_last"],
+                COL_MT_DOMAIN: r[f"{COL_MT_DOMAIN}_last"],
+                "Movement": "Transfer out",
+                "FTE": r[f"{COL_FTE}_last"],
+                "ContrSide": r["ContrFlag_last"]
+            })
+
+            rows.append({
+                "MT_CC": r["MT_CC_curr"],
+                COL_COST_CAT: r[f"{COL_COST_CAT}_curr"],
+                COL_MT_DOMAIN: r[f"{COL_MT_DOMAIN}_curr"],
+                "Movement": "Transfer in",
+                "FTE": r[f"{COL_FTE}_curr"],
+                "ContrSide": r["ContrFlag_curr"]
+            })
+
+movements = pd.DataFrame(rows)
+
+# ==============================
+# COMMENTS
+# ==============================
+comments = (
+    movements[movements["ContrSide"] == CONTR_CONT]
+    .groupby("MT_CC")["Movement"]
+    .apply(lambda x: ", ".join(x))
+    .reset_index()
+)
+
+comments.columns = ["MT_CC", "Comments"]
+
+# ==============================
+# SUMMARY
+# ==============================
+group_cols = [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
 
 curr_sum = (
-    hc_current.groupby(group_cols)["FTE"]
+    hc_curr[hc_curr["ContrFlag"] == CONTR_CONT]
+    .groupby(group_cols)[COL_FTE]
     .sum()
     .reset_index()
-    .rename(columns={"FTE": "HC_Current"})
+    .rename(columns={COL_FTE: "HC_Current"})
 )
 
 last_sum = (
-    hc_last.groupby(group_cols)["FTE"]
+    hc_last[hc_last["ContrFlag"] == CONTR_CONT]
+    .groupby(group_cols)[COL_FTE]
     .sum()
     .reset_index()
-    .rename(columns={"FTE": "HC_Last"})
+    .rename(columns={COL_FTE: "HC_Last"})
 )
 
 summary = curr_sum.merge(last_sum, on=group_cols, how="outer").fillna(0)
+
 summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
 
 # ==============================
-# MOVEMENT LOGIC
+# MERGE COMMENTS
 # ==============================
-
-# UNIQUE IDS
-curr_ids = set(hc_current["Employee ID"])
-last_ids = set(hc_last["Employee ID"])
-
-joiners = curr_ids - last_ids
-leavers = last_ids - curr_ids
-common = curr_ids & last_ids
-
-# TAG MOVEMENTS
-hc_current["Movement"] = "Existing"
-hc_last["Movement"] = "Existing"
-
-hc_current.loc[hc_current["Employee ID"].isin(joiners), "Movement"] = "Joiner"
-hc_last.loc[hc_last["Employee ID"].isin(leavers), "Movement"] = "Leaver"
-
-# TRANSFERS
-curr_map = hc_current.set_index("Employee ID")[["MT Domain"]]
-last_map = hc_last.set_index("Employee ID")[["MT Domain"]]
-
-transfer_ids = [
-    i for i in common
-    if i in curr_map.index and i in last_map.index and
-    curr_map.loc[i, "MT Domain"] != last_map.loc[i, "MT Domain"]
-]
-
-hc_current.loc[hc_current["Employee ID"].isin(transfer_ids), "Movement"] = "Transfer"
+summary = summary.merge(comments, on="MT_CC", how="left").fillna("")
 
 # ==============================
-# MOVEMENT SUMMARY
+# FINAL CLEAN
 # ==============================
-movements = pd.concat([
-    hc_current[["Cost Cat", "MT Domain", "Movement"]],
-    hc_last[["Cost Cat", "MT Domain", "Movement"]]
-])
-
-movement_summary = (
-    movements.groupby(["Cost Cat", "MT Domain", "Movement"])
-    .size()
-    .reset_index(name="Count")
-)
-
-# PIVOT
-movement_pivot = movement_summary.pivot_table(
-    index=["Cost Cat", "MT Domain"],
-    columns="Movement",
-    values="Count",
-    fill_value=0
-).reset_index()
+final = summary[[
+    COL_COST_CAT,
+    COL_MT_DOMAIN,
+    "HC_Last",
+    "HC_Current",
+    "Net Change",
+    "Comments"
+]]
 
 # ==============================
-# MERGE MOVEMENTS INTO SUMMARY
-# ==============================
-summary = summary.merge(
-    movement_pivot,
-    on=["Cost Cat", "MT Domain"],
-    how="left"
-).fillna(0)
-
-# ==============================
-# COMMENTS GENERATION
-# ==============================
-def generate_comment(row):
-    parts = []
-    
-    if row.get("Joiner", 0) > 0:
-        parts.append(f"{int(row['Joiner'])} joiners")
-    if row.get("Leaver", 0) > 0:
-        parts.append(f"{int(row['Leaver'])} leavers")
-    if row.get("Transfer", 0) > 0:
-        parts.append(f"{int(row['Transfer'])} transfers")
-
-    if not parts:
-        return "No major movement"
-
-    return ", ".join(parts)
-
-summary["Comments"] = summary.apply(generate_comment, axis=1)
-
-# ==============================
-# FINAL SORT
-# ==============================
-summary = summary.sort_values(["Cost Cat", "MT Domain"])
-
-# ==============================
-# SAVE OUTPUT
+# SAVE
 # ==============================
 output = dataiku.Dataset("Final_Output")
-output.write_with_schema(summary)
+output.write_with_schema(final)
 
-print("✅ FULL REPORT WITH MOVEMENTS + COMMENTS READY")
+print("✅ FULL REPLICA LOGIC BUILT SUCCESSFULLY")
