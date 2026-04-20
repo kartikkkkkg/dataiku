@@ -4,7 +4,7 @@ import numpy as np
 from collections import defaultdict
 
 # ==============================
-# LOAD DATASETS
+# LOAD DATA
 # ==============================
 hc_curr_raw = dataiku.Dataset("hc_current_clean").get_dataframe()
 hc_last_raw = dataiku.Dataset("hc_last_clean").get_dataframe()
@@ -12,7 +12,13 @@ mapping = dataiku.Dataset("mapping").get_dataframe()
 rollup = dataiku.Dataset("rollup").get_dataframe()
 
 # ==============================
-# COLUMN CONFIG (STRICT)
+# CLEAN
+# ==============================
+for df in [hc_curr_raw, hc_last_raw, mapping, rollup]:
+    df.columns = df.columns.str.strip()
+
+# ==============================
+# CONFIG
 # ==============================
 COL_BANK_ID = "Bank ID"
 COL_BF_L6 = "Business Function Lvl 6"
@@ -22,7 +28,7 @@ COL_FTE = "FTE"
 COL_COST_CAT = "Cost Cat"
 COL_MT_DOMAIN = "MT Domain"
 COL_MT1_DOMAIN = "MT-1 Domain"
-COL_CONTR = "Contr/Non-Contr"
+COL_CONTR = "Contr/Non-Controllable"
 
 COL_ROLLUP_ID = "Employee ID"
 COL_ROLLUP_GBF = "Global Business Function"
@@ -30,26 +36,23 @@ COL_ROLLUP_GBF = "Global Business Function"
 CONTR_CONT = "Controllable"
 CONTR_NON = "Non-Controllable"
 
-# ==============================
-# CLEAN COLUMNS
-# ==============================
-for df in [hc_curr_raw, hc_last_raw, mapping, rollup]:
-    df.columns = df.columns.str.strip()
+COST_CAT_ORDER = ["BAU", "CIO Mgmt", "TPS", "Proj"]
+
+TOTAL_LABELS = {
+    "BAU": "BAU TOTAL",
+    "CIO Mgmt": "CIO MGMT TOTAL",
+    "TPS": "TPS TOTAL",
+    "Proj": "PROJ TOTAL"
+}
+
+COMMENT_THRESHOLD = 10
 
 # ==============================
-# BUILD MAPPING TABLES
+# MAPPING
 # ==============================
-bf_map = mapping[
-    [COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN]
-].drop_duplicates()
+bf_map = mapping[[COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN]].drop_duplicates()
+emp_map = mapping[[COL_EMP_TYPE, COL_CONTR]].drop_duplicates()
 
-emp_map = mapping[
-    [COL_EMP_TYPE, COL_CONTR]
-].drop_duplicates()
-
-# ==============================
-# APPLY MAPPING
-# ==============================
 def apply_mapping(df):
     df = df[[COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE, COL_FTE]].copy()
     df[COL_BANK_ID] = df[COL_BANK_ID].astype(str).str.strip()
@@ -58,7 +61,6 @@ def apply_mapping(df):
     df = df.merge(emp_map, on=COL_EMP_TYPE, how="left")
 
     df.rename(columns={COL_CONTR: "ContrFlag"}, inplace=True)
-
     df["MT_CC"] = df[COL_MT_DOMAIN].astype(str) + "-" + df[COL_COST_CAT].astype(str)
 
     return df
@@ -67,53 +69,36 @@ hc_curr = apply_mapping(hc_curr_raw)
 hc_last = apply_mapping(hc_last_raw)
 
 # ==============================
-# SNAPSHOTS
+# SNAPSHOT
 # ==============================
-def build_snapshot(df, suffix):
-    cols = [
-        COL_BANK_ID,
-        "MT_CC",
-        COL_COST_CAT,
-        COL_MT_DOMAIN,
-        COL_EMP_TYPE,
-        "ContrFlag",
-        COL_FTE,
-    ]
+def snapshot(df, suffix):
+    cols = [COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, COL_EMP_TYPE, "ContrFlag", COL_FTE]
+    df = df[cols].copy()
+    df = df.sort_values(COL_BANK_ID).drop_duplicates(COL_BANK_ID, keep="last")
+    df = df.add_suffix("_" + suffix)
+    df.rename(columns={COL_BANK_ID + "_" + suffix: COL_BANK_ID}, inplace=True)
+    return df
 
-    snap = df[cols].copy()
-    snap = snap.sort_values(COL_BANK_ID).drop_duplicates(COL_BANK_ID, keep="last")
-    snap = snap.add_suffix(f"_{suffix}")
-    snap.rename(columns={f"{COL_BANK_ID}_{suffix}": COL_BANK_ID}, inplace=True)
+curr = snapshot(hc_curr, "curr")
+last = snapshot(hc_last, "last")
 
-    return snap
-
-snap_curr = build_snapshot(hc_curr, "curr")
-snap_last = build_snapshot(hc_last, "last")
+combined = last.merge(curr, on=COL_BANK_ID, how="outer")
 
 # ==============================
 # ROLLUP
 # ==============================
 rollup[COL_ROLLUP_ID] = rollup[COL_ROLLUP_ID].astype(str).str.strip()
+rollup_ids = set(rollup[COL_ROLLUP_ID])
 
-rollup_ids = set(rollup[COL_ROLLUP_ID].dropna())
-
-rollup_gbf_map = dict(
-    zip(rollup[COL_ROLLUP_ID], rollup[COL_ROLLUP_GBF])
-)
+rollup_gbf_map = dict(zip(rollup[COL_ROLLUP_ID], rollup[COL_ROLLUP_GBF]))
 
 # ==============================
-# COMBINE
-# ==============================
-combined = snap_last.merge(
-    snap_curr,
-    on=COL_BANK_ID,
-    how="outer"
-)
-
-# ==============================
-# MOVEMENTS
+# MOVEMENTS (EXACT LOGIC)
 # ==============================
 rows = []
+
+def add_move(r):
+    rows.append(r)
 
 for _, r in combined.iterrows():
     bid = r[COL_BANK_ID]
@@ -122,112 +107,84 @@ for _, r in combined.iterrows():
     has_curr = pd.notna(r.get("MT_CC_curr"))
 
     if has_curr and not has_last:
-        movement = "New Joiners" if bid not in rollup_ids else "Non TnO Joiners"
-
-        rows.append({
-            "MT_CC": r["MT_CC_curr"],
-            COL_COST_CAT: r[f"{COL_COST_CAT}_curr"],
-            COL_MT_DOMAIN: r[f"{COL_MT_DOMAIN}_curr"],
-            "Movement": movement,
-            "FTE": r[f"{COL_FTE}_curr"],
-            "ContrSide": r["ContrFlag_curr"]
-        })
+        movement = "Non TnO Joiners" if bid in rollup_ids else "New Joiners"
+        add_move({"MT_CC": r["MT_CC_curr"], COL_COST_CAT: r["Cost Cat_curr"], COL_MT_DOMAIN: r["MT Domain_curr"], "Movement": movement, "FTE": r["FTE_curr"], "ContrSide": r["ContrFlag_curr"]})
 
     elif has_last and not has_curr:
         if bid in rollup_gbf_map:
-            movement = "TnO Leavers"
+            add_move({"MT_CC": r["MT_CC_last"], COL_COST_CAT: r["Cost Cat_last"], COL_MT_DOMAIN: r["MT Domain_last"], "Movement": "TnO Leavers", "FTE": r["FTE_last"], "ContrSide": r["ContrFlag_last"], "To": rollup_gbf_map.get(bid)})
         else:
-            movement = "Left Bank"
-
-        rows.append({
-            "MT_CC": r["MT_CC_last"],
-            COL_COST_CAT: r[f"{COL_COST_CAT}_last"],
-            COL_MT_DOMAIN: r[f"{COL_MT_DOMAIN}_last"],
-            "Movement": movement,
-            "FTE": r[f"{COL_FTE}_last"],
-            "ContrSide": r["ContrFlag_last"]
-        })
+            add_move({"MT_CC": r["MT_CC_last"], COL_COST_CAT: r["Cost Cat_last"], COL_MT_DOMAIN: r["MT Domain_last"], "Movement": "Left Bank", "FTE": r["FTE_last"], "ContrSide": r["ContrFlag_last"]})
 
     elif has_last and has_curr:
         if r["MT_CC_last"] != r["MT_CC_curr"]:
-            rows.append({
-                "MT_CC": r["MT_CC_last"],
-                COL_COST_CAT: r[f"{COL_COST_CAT}_last"],
-                COL_MT_DOMAIN: r[f"{COL_MT_DOMAIN}_last"],
-                "Movement": "Transfer out",
-                "FTE": r[f"{COL_FTE}_last"],
-                "ContrSide": r["ContrFlag_last"]
-            })
-
-            rows.append({
-                "MT_CC": r["MT_CC_curr"],
-                COL_COST_CAT: r[f"{COL_COST_CAT}_curr"],
-                COL_MT_DOMAIN: r[f"{COL_MT_DOMAIN}_curr"],
-                "Movement": "Transfer in",
-                "FTE": r[f"{COL_FTE}_curr"],
-                "ContrSide": r["ContrFlag_curr"]
-            })
+            add_move({"MT_CC": r["MT_CC_last"], COL_COST_CAT: r["Cost Cat_last"], COL_MT_DOMAIN: r["MT Domain_last"], "Movement": "Transfer out", "FTE": r["FTE_last"], "ContrSide": r["ContrFlag_last"]})
+            add_move({"MT_CC": r["MT_CC_curr"], COL_COST_CAT: r["Cost Cat_curr"], COL_MT_DOMAIN: r["MT Domain_curr"], "Movement": "Transfer in", "FTE": r["FTE_curr"], "ContrSide": r["ContrFlag_curr"]})
 
 movements = pd.DataFrame(rows)
 
 # ==============================
-# COMMENTS
+# COMMENTS (FULL STYLE)
 # ==============================
-comments = (
-    movements[movements["ContrSide"] == CONTR_CONT]
-    .groupby("MT_CC")["Movement"]
-    .apply(lambda x: ", ".join(x))
-    .reset_index()
-)
+def build_comments(df):
+    out = []
+    for mtcc, g in df.groupby("MT_CC"):
+        lines = []
+        for m in ["New Joiners","Non TnO Joiners","Transfer in","TnO Leavers","Left Bank","Transfer out"]:
+            val = round(g[g["Movement"]==m]["FTE"].sum())
+            if val!=0:
+                lines.append(f"{m} - {val}")
+        out.append({"MT_CC":mtcc,"Comments":"\n".join(lines)})
+    return pd.DataFrame(out)
 
-comments.columns = ["MT_CC", "Comments"]
+comments = build_comments(movements)
 
 # ==============================
 # SUMMARY
 # ==============================
-group_cols = [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
+curr_sum = hc_curr[hc_curr["ContrFlag"]==CONTR_CONT].groupby(["Cost Cat","MT Domain","MT_CC"])["FTE"].sum().reset_index(name="HC_Current")
+last_sum = hc_last[hc_last["ContrFlag"]==CONTR_CONT].groupby(["Cost Cat","MT Domain","MT_CC"])["FTE"].sum().reset_index(name="HC_Last")
 
-curr_sum = (
-    hc_curr[hc_curr["ContrFlag"] == CONTR_CONT]
-    .groupby(group_cols)[COL_FTE]
-    .sum()
-    .reset_index()
-    .rename(columns={COL_FTE: "HC_Current"})
-)
-
-last_sum = (
-    hc_last[hc_last["ContrFlag"] == CONTR_CONT]
-    .groupby(group_cols)[COL_FTE]
-    .sum()
-    .reset_index()
-    .rename(columns={COL_FTE: "HC_Last"})
-)
-
-summary = curr_sum.merge(last_sum, on=group_cols, how="outer").fillna(0)
-
+summary = curr_sum.merge(last_sum, on=["Cost Cat","MT Domain","MT_CC"], how="outer").fillna(0)
 summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
 
-# ==============================
-# MERGE COMMENTS
-# ==============================
 summary = summary.merge(comments, on="MT_CC", how="left").fillna("")
+summary.loc[summary["Net Change"].abs()<=COMMENT_THRESHOLD,"Comments"]=""
 
 # ==============================
-# FINAL CLEAN
+# SORT + TOTALS
 # ==============================
-final = summary[[
-    COL_COST_CAT,
-    COL_MT_DOMAIN,
-    "HC_Last",
-    "HC_Current",
-    "Net Change",
-    "Comments"
-]]
+summary["__order"]=pd.Categorical(summary["Cost Cat"], categories=COST_CAT_ORDER, ordered=True)
+summary=summary.sort_values(["__order","MT Domain"]).drop(columns="__order")
+
+final_rows=[]
+for cat in COST_CAT_ORDER:
+    block=summary[summary["Cost Cat"]==cat]
+    if block.empty: continue
+    final_rows.append(block)
+    final_rows.append(pd.DataFrame([{
+        "Cost Cat":TOTAL_LABELS[cat],
+        "MT Domain":"",
+        "HC_Last":block["HC_Last"].sum(),
+        "HC_Current":block["HC_Current"].sum(),
+        "Net Change":block["Net Change"].sum(),
+        "Comments":""
+    }]))
+
+final_rows.append(pd.DataFrame([{
+    "Cost Cat":"GRAND TOTAL",
+    "MT Domain":"",
+    "HC_Last":summary["HC_Last"].sum(),
+    "HC_Current":summary["HC_Current"].sum(),
+    "Net Change":summary["Net Change"].sum(),
+    "Comments":""
+}]))
+
+final=pd.concat(final_rows,ignore_index=True)
 
 # ==============================
 # SAVE
 # ==============================
-output = dataiku.Dataset("Final_Output")
-output.write_with_schema(final)
+dataiku.Dataset("Final_Output").write_with_schema(final)
 
-print("✅ FULL REPLICA LOGIC BUILT SUCCESSFULLY")
+print("✅ EXACT SCRIPT LOGIC REPLICATED (NO EMAIL)")
