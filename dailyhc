@@ -7,47 +7,39 @@ import pandas as pd
 hc_current = dataiku.Dataset("hc_current_clean").get_dataframe()
 hc_last = dataiku.Dataset("hc_last_clean").get_dataframe()
 mapping = dataiku.Dataset("mapping").get_dataframe()
-rollup = dataiku.Dataset("rollup").get_dataframe()
 
 # ==============================
 # CLEAN COLUMN NAMES
 # ==============================
-for df in [hc_current, hc_last, mapping, rollup]:
+for df in [hc_current, hc_last, mapping]:
     df.columns = df.columns.str.strip()
 
 # ==============================
-# DEBUG: SEE REAL STRUCTURE
+# SPLIT MAPPING
 # ==============================
-print("\nMAPPING COLUMNS:")
-print(mapping.columns.tolist())
-
-# ==============================
-# 🔥 SPLIT MAPPING (IMPORTANT)
-# ==============================
-
-# LEFT SIDE (BF mapping)
 bf_map = mapping[[
     "Business Function Lvl 6",
     "Cost Cat",
-    "MT Domain",
-    "MT-1 Domain"
+    "MT Domain"
 ]].dropna(subset=["Business Function Lvl 6"])
 
-# RIGHT SIDE (EMP mapping)
 emp_map = mapping[[
     "Employment Type",
     "Contr/Non-Contr"
 ]].dropna(subset=["Employment Type"])
 
 # ==============================
-# NORMALIZE KEYS (CRITICAL)
+# NORMALIZE KEYS
 # ==============================
-for df in [hc_current, hc_last]:
-    df["Business Function Lvl 6"] = df["Business Function Lvl 6"].astype(str).str.strip().str.lower()
-    df["Employment Type"] = df["Employment Type"].astype(str).str.strip().str.lower()
+def clean_col(df, col):
+    return df[col].astype(str).str.strip().str.lower()
 
-bf_map["Business Function Lvl 6"] = bf_map["Business Function Lvl 6"].astype(str).str.strip().str.lower()
-emp_map["Employment Type"] = emp_map["Employment Type"].astype(str).str.strip().str.lower()
+for df in [hc_current, hc_last]:
+    df["Business Function Lvl 6"] = clean_col(df, "Business Function Lvl 6")
+    df["Employment Type"] = clean_col(df, "Employment Type")
+
+bf_map["Business Function Lvl 6"] = clean_col(bf_map, "Business Function Lvl 6")
+emp_map["Employment Type"] = clean_col(emp_map, "Employment Type")
 
 # ==============================
 # APPLY MAPPING
@@ -59,15 +51,21 @@ hc_current = hc_current.merge(emp_map, on="Employment Type", how="left")
 hc_last = hc_last.merge(emp_map, on="Employment Type", how="left")
 
 # ==============================
-# 🚨 DEBUG CHECK (VERY IMPORTANT)
+# 🚨 HARD VALIDATION (KEY FIX)
 # ==============================
-print("\nAFTER MAPPING COLUMNS:")
-print(hc_current.columns.tolist())
+required_cols = ["Cost Cat", "MT Domain", "FTE"]
 
-if "Cost Cat" not in hc_current.columns:
-    raise Exception("❌ Cost Cat column STILL missing → mapping failed")
+for col in required_cols:
+    if col not in hc_current.columns:
+        raise Exception(f"❌ {col} missing in hc_current AFTER mapping")
+    if col not in hc_last.columns:
+        raise Exception(f"❌ {col} missing in hc_last AFTER mapping")
 
-print("\nNULL Cost Cat:", hc_current["Cost Cat"].isna().sum())
+# ==============================
+# DROP BAD ROWS (IMPORTANT)
+# ==============================
+hc_current = hc_current.dropna(subset=["Cost Cat", "MT Domain"])
+hc_last = hc_last.dropna(subset=["Cost Cat", "MT Domain"])
 
 # ==============================
 # GROUPING
@@ -89,9 +87,15 @@ last_sum = (
 )
 
 # ==============================
-# MERGE + NET CHANGE
+# SAFE MERGE
 # ==============================
-summary = curr_sum.merge(last_sum, on=group_cols, how="outer").fillna(0)
+summary = curr_sum.merge(last_sum, on=group_cols, how="outer")
+
+# ==============================
+# FILL + CALCULATE
+# ==============================
+summary["HC_Current"] = summary["HC_Current"].fillna(0)
+summary["HC_Last"] = summary["HC_Last"].fillna(0)
 
 summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
 
@@ -101,4 +105,4 @@ summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
 output = dataiku.Dataset("HC_Output")
 output.write_with_schema(summary)
 
-print("\n✅ SUCCESS — NO MORE COST CAT ERROR")
+print("\n✅ SUCCESS — FINAL OUTPUT BUILT")
