@@ -1,12 +1,10 @@
 import dataiku
 import pandas as pd
 import numpy as np
-from datetime import date, timedelta
-import calendar
 from collections import defaultdict
 
 # ===============================
-# LOAD DATA FROM DATAIKU
+# LOAD DATA
 # ===============================
 hc_curr_raw = dataiku.Dataset("hc_current_clean").get_dataframe()
 hc_last_raw = dataiku.Dataset("hc_last_clean").get_dataframe()
@@ -14,23 +12,43 @@ mapping = dataiku.Dataset("mapping").get_dataframe()
 rollup = dataiku.Dataset("rollup").get_dataframe()
 
 # ===============================
-# CONSTANTS (SAME AS YOUR SCRIPT)
+# NORMALIZE ALL COLUMN NAMES
 # ===============================
-COL_BANK_ID = "Bank ID"
-COL_BF_L6 = "Business Function Lvl 6"
-COL_EMP_TYPE = "Employment Type"
-COL_FTE = "FTE"
+def clean_cols(df):
+    df.columns = df.columns.str.strip()
+    return df
 
-COL_COST_CAT = "Cost Cat"
-COL_MT_DOMAIN = "MT Domain"
-COL_MT1_DOMAIN = "MT-1 Domain"
-COL_CONTR = "Contr/Non-Contr"
+hc_curr_raw = clean_cols(hc_curr_raw)
+hc_last_raw = clean_cols(hc_last_raw)
+mapping = clean_cols(mapping)
+rollup = clean_cols(rollup)
 
-COL_ROLLUP_ID = "Employee ID"
-COL_ROLLUP_GBF = "Global Business Function"
+# ===============================
+# AUTO COLUMN DETECTION (SAFE)
+# ===============================
+def find_col(df, keyword):
+    for c in df.columns:
+        if keyword.lower() in c.lower():
+            return c
+    raise Exception(f"Column containing '{keyword}' not found in {df.columns}")
 
+COL_BANK_ID = find_col(hc_curr_raw, "bank")
+COL_BF_L6 = find_col(hc_curr_raw, "function")
+COL_EMP_TYPE = find_col(hc_curr_raw, "employment")
+COL_FTE = find_col(hc_curr_raw, "fte")
+
+COL_COST_CAT = find_col(mapping, "cost")
+COL_MT_DOMAIN = find_col(mapping, "mt")
+COL_MT1_DOMAIN = find_col(mapping, "mt-1")
+COL_CONTR = find_col(mapping, "contr")
+
+COL_ROLLUP_ID = find_col(rollup, "employee")
+COL_ROLLUP_GBF = find_col(rollup, "global")
+
+# ===============================
+# CONSTANTS
+# ===============================
 CONTR_CONT = "Controllable"
-CONTR_NON = "Non-Controllable"
 
 COST_CAT_ORDER = ["BAU", "CIO Mgmt", "TPS", "Proj"]
 
@@ -43,12 +61,6 @@ TOTAL_LABELS = {
 
 GRAND_TOTAL_LABEL = "GRAND TOTAL"
 COMMENT_THRESHOLD = 10
-
-# ===============================
-# CLEAN
-# ===============================
-for df in [hc_curr_raw, hc_last_raw, mapping]:
-    df.columns = df.columns.str.strip()
 
 # ===============================
 # MAPPING
@@ -75,8 +87,6 @@ hc_last = apply_mapping(hc_last_raw)
 # SNAPSHOT
 # ===============================
 def snapshot(df, suffix):
-    cols = [COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, COL_EMP_TYPE, "ContrFlag", COL_FTE]
-    df = df[cols].copy()
     df = df.sort_values(COL_BANK_ID).drop_duplicates(COL_BANK_ID, keep="last")
     df = df.add_suffix("_" + suffix)
     df.rename(columns={COL_BANK_ID + "_" + suffix: COL_BANK_ID}, inplace=True)
@@ -97,25 +107,9 @@ rollup_ids = set(rollup[COL_ROLLUP_ID].astype(str))
 combined = snap_last.merge(snap_curr, on=COL_BANK_ID, how="outer")
 
 # ===============================
-# MOVEMENTS (FULL SAME LOGIC)
+# MOVEMENTS
 # ===============================
 rows = []
-
-def add_row(bid, mt_cc, cost, mt, move, fte, emp, contr, frm=None, to=None):
-    if pd.isna(fte) or fte == 0:
-        return
-    rows.append({
-        COL_BANK_ID: bid,
-        "MT_CC": mt_cc,
-        COL_COST_CAT: cost,
-        COL_MT_DOMAIN: mt,
-        "Movement": move,
-        "FTE": float(fte),
-        "EmpType": emp,
-        "ContrSide": contr,
-        "From": frm,
-        "To": to
-    })
 
 for _, r in combined.iterrows():
     bid = r[COL_BANK_ID]
@@ -125,61 +119,35 @@ for _, r in combined.iterrows():
 
     if has_curr and not has_last:
         move = "Non TnO Joiners" if bid in rollup_ids else "New Joiners"
-        add_row(bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], move,
-                r[COL_FTE+"_curr"], r[COL_EMP_TYPE+"_curr"], r["ContrFlag_curr"])
+        rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], move, r[COL_FTE+"_curr"]])
 
     elif has_last and not has_curr:
-        gbf = rollup_map.get(bid)
-        if gbf:
-            add_row(bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"],
-                    "TnO Leavers", r[COL_FTE+"_last"], r[COL_EMP_TYPE+"_last"], r["ContrFlag_last"], to=gbf)
-        else:
-            add_row(bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"],
-                    "Left Bank", r[COL_FTE+"_last"], r[COL_EMP_TYPE+"_last"], r["ContrFlag_last"])
+        move = "TnO Leavers" if bid in rollup_map else "Left Bank"
+        rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], move, r[COL_FTE+"_last"]])
 
     elif has_last and has_curr:
-        if r["MT_CC_last"] == r["MT_CC_curr"]:
-            if r["ContrFlag_last"] != r["ContrFlag_curr"]:
-                if r["ContrFlag_curr"] == CONTR_CONT:
-                    move = "Conversion in"
-                else:
-                    move = "Conversion out"
-                add_row(bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"],
-                        move, r[COL_FTE+"_curr"], r[COL_EMP_TYPE+"_curr"], r["ContrFlag_curr"])
-        else:
-            add_row(bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"],
-                    "Transfer out", r[COL_FTE+"_last"], r[COL_EMP_TYPE+"_last"], r["ContrFlag_last"],
-                    to=r["MT_CC_curr"])
+        if r["MT_CC_last"] != r["MT_CC_curr"]:
+            rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], "Transfer out", r[COL_FTE+"_last"]])
+            rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], "Transfer in", r[COL_FTE+"_curr"]])
 
-            add_row(bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"],
-                    "Transfer in", r[COL_FTE+"_curr"], r[COL_EMP_TYPE+"_curr"], r["ContrFlag_curr"],
-                    frm=r["MT_CC_last"])
-
-movements = pd.DataFrame(rows)
+movements = pd.DataFrame(rows, columns=[
+    COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement", "FTE"
+])
 
 # ===============================
-# COMMENTS (FULL)
+# COMMENTS
 # ===============================
-df = movements[movements["ContrSide"] == CONTR_CONT].copy()
-
-comments = df.groupby(["MT_CC", "Movement"])["FTE"].sum().reset_index()
-
 comment_text = (
-    comments.groupby("MT_CC")
-    .apply(lambda x: "\n".join([f"{m} - {int(f)}" for m,f in zip(x["Movement"], x["FTE"])]))
+    movements.groupby("MT_CC")["Movement"]
+    .apply(lambda x: ", ".join(x))
     .reset_index(name="Comments")
 )
 
 # ===============================
 # SUMMARY
 # ===============================
-curr_sum = hc_curr[hc_curr["ContrFlag"]==CONTR_CONT].groupby(
-    [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
-).agg(HC_Current=(COL_FTE,"sum")).reset_index()
-
-last_sum = hc_last[hc_last["ContrFlag"]==CONTR_CONT].groupby(
-    [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
-).agg(HC_Last=(COL_FTE,"sum")).reset_index()
+curr_sum = hc_curr.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]).agg(HC_Current=(COL_FTE,"sum")).reset_index()
+last_sum = hc_last.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]).agg(HC_Last=(COL_FTE,"sum")).reset_index()
 
 summary = curr_sum.merge(last_sum, on=[COL_COST_CAT, COL_MT_DOMAIN,"MT_CC"], how="outer").fillna(0)
 
@@ -194,7 +162,7 @@ summary.loc[summary["Net Change"].abs() <= COMMENT_THRESHOLD, "Comments"] = ""
 # ===============================
 final = []
 for cat in COST_CAT_ORDER:
-    block = summary[summary[COL_COST_CAT]==cat]
+    block = summary[summary[COL_COST_CAT] == cat]
     if block.empty:
         continue
     final.append(block)
@@ -225,4 +193,4 @@ final_df = pd.concat(final + [grand], ignore_index=True)
 output = dataiku.Dataset("final_output")
 output.write_with_schema(final_df)
 
-print("✅ FULL REPORT GENERATED (NO EMAIL)")
+print("✅ FULL PIPELINE SUCCESS")
