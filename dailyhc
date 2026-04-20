@@ -9,7 +9,7 @@ hc_last = dataiku.Dataset("hc_last_clean").get_dataframe()
 mapping = dataiku.Dataset("mapping").get_dataframe()
 
 # ==============================
-# CLEAN COLUMN NAMES
+# CLEAN COLUMNS
 # ==============================
 for df in [hc_current, hc_last, mapping]:
     df.columns = df.columns.str.strip()
@@ -31,15 +31,15 @@ emp_map = mapping[[
 # ==============================
 # NORMALIZE KEYS
 # ==============================
-def clean_col(df, col):
-    return df[col].astype(str).str.strip().str.lower()
+def clean(x):
+    return x.astype(str).str.strip().str.lower()
 
 for df in [hc_current, hc_last]:
-    df["Business Function Lvl 6"] = clean_col(df, "Business Function Lvl 6")
-    df["Employment Type"] = clean_col(df, "Employment Type")
+    df["Business Function Lvl 6"] = clean(df["Business Function Lvl 6"])
+    df["Employment Type"] = clean(df["Employment Type"])
 
-bf_map["Business Function Lvl 6"] = clean_col(bf_map, "Business Function Lvl 6")
-emp_map["Employment Type"] = clean_col(emp_map, "Employment Type")
+bf_map["Business Function Lvl 6"] = clean(bf_map["Business Function Lvl 6"])
+emp_map["Employment Type"] = clean(emp_map["Employment Type"])
 
 # ==============================
 # APPLY MAPPING
@@ -51,24 +51,14 @@ hc_current = hc_current.merge(emp_map, on="Employment Type", how="left")
 hc_last = hc_last.merge(emp_map, on="Employment Type", how="left")
 
 # ==============================
-# 🚨 HARD VALIDATION (KEY FIX)
+# HANDLE MISSING
 # ==============================
-required_cols = ["Cost Cat", "MT Domain", "FTE"]
-
-for col in required_cols:
-    if col not in hc_current.columns:
-        raise Exception(f"❌ {col} missing in hc_current AFTER mapping")
-    if col not in hc_last.columns:
-        raise Exception(f"❌ {col} missing in hc_last AFTER mapping")
+for df in [hc_current, hc_last]:
+    df["Cost Cat"] = df["Cost Cat"].fillna("UNKNOWN")
+    df["MT Domain"] = df["MT Domain"].fillna("UNKNOWN")
 
 # ==============================
-# DROP BAD ROWS (IMPORTANT)
-# ==============================
-hc_current = hc_current.dropna(subset=["Cost Cat", "MT Domain"])
-hc_last = hc_last.dropna(subset=["Cost Cat", "MT Domain"])
-
-# ==============================
-# GROUPING
+# GROUP SUMMARY
 # ==============================
 group_cols = ["Cost Cat", "MT Domain"]
 
@@ -86,23 +76,100 @@ last_sum = (
     .rename(columns={"FTE": "HC_Last"})
 )
 
-# ==============================
-# SAFE MERGE
-# ==============================
-summary = curr_sum.merge(last_sum, on=group_cols, how="outer")
-
-# ==============================
-# FILL + CALCULATE
-# ==============================
-summary["HC_Current"] = summary["HC_Current"].fillna(0)
-summary["HC_Last"] = summary["HC_Last"].fillna(0)
-
+summary = curr_sum.merge(last_sum, on=group_cols, how="outer").fillna(0)
 summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
+
+# ==============================
+# MOVEMENT LOGIC
+# ==============================
+
+# UNIQUE IDS
+curr_ids = set(hc_current["Employee ID"])
+last_ids = set(hc_last["Employee ID"])
+
+joiners = curr_ids - last_ids
+leavers = last_ids - curr_ids
+common = curr_ids & last_ids
+
+# TAG MOVEMENTS
+hc_current["Movement"] = "Existing"
+hc_last["Movement"] = "Existing"
+
+hc_current.loc[hc_current["Employee ID"].isin(joiners), "Movement"] = "Joiner"
+hc_last.loc[hc_last["Employee ID"].isin(leavers), "Movement"] = "Leaver"
+
+# TRANSFERS
+curr_map = hc_current.set_index("Employee ID")[["MT Domain"]]
+last_map = hc_last.set_index("Employee ID")[["MT Domain"]]
+
+transfer_ids = [
+    i for i in common
+    if i in curr_map.index and i in last_map.index and
+    curr_map.loc[i, "MT Domain"] != last_map.loc[i, "MT Domain"]
+]
+
+hc_current.loc[hc_current["Employee ID"].isin(transfer_ids), "Movement"] = "Transfer"
+
+# ==============================
+# MOVEMENT SUMMARY
+# ==============================
+movements = pd.concat([
+    hc_current[["Cost Cat", "MT Domain", "Movement"]],
+    hc_last[["Cost Cat", "MT Domain", "Movement"]]
+])
+
+movement_summary = (
+    movements.groupby(["Cost Cat", "MT Domain", "Movement"])
+    .size()
+    .reset_index(name="Count")
+)
+
+# PIVOT
+movement_pivot = movement_summary.pivot_table(
+    index=["Cost Cat", "MT Domain"],
+    columns="Movement",
+    values="Count",
+    fill_value=0
+).reset_index()
+
+# ==============================
+# MERGE MOVEMENTS INTO SUMMARY
+# ==============================
+summary = summary.merge(
+    movement_pivot,
+    on=["Cost Cat", "MT Domain"],
+    how="left"
+).fillna(0)
+
+# ==============================
+# COMMENTS GENERATION
+# ==============================
+def generate_comment(row):
+    parts = []
+    
+    if row.get("Joiner", 0) > 0:
+        parts.append(f"{int(row['Joiner'])} joiners")
+    if row.get("Leaver", 0) > 0:
+        parts.append(f"{int(row['Leaver'])} leavers")
+    if row.get("Transfer", 0) > 0:
+        parts.append(f"{int(row['Transfer'])} transfers")
+
+    if not parts:
+        return "No major movement"
+
+    return ", ".join(parts)
+
+summary["Comments"] = summary.apply(generate_comment, axis=1)
+
+# ==============================
+# FINAL SORT
+# ==============================
+summary = summary.sort_values(["Cost Cat", "MT Domain"])
 
 # ==============================
 # SAVE OUTPUT
 # ==============================
-output = dataiku.Dataset("HC_Output")
+output = dataiku.Dataset("Final_Output")
 output.write_with_schema(summary)
 
-print("\n✅ SUCCESS — FINAL OUTPUT BUILT")
+print("✅ FULL REPORT WITH MOVEMENTS + COMMENTS READY")
