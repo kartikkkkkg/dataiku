@@ -1,67 +1,77 @@
 import dataiku
 import pandas as pd
 
-# ===============================
-# READ DATA
-# ===============================
+# ==============================
+# LOAD DATA
+# ==============================
 hc_current = dataiku.Dataset("hc_current_clean").get_dataframe()
 hc_last = dataiku.Dataset("hc_last_clean").get_dataframe()
 mapping = dataiku.Dataset("mapping").get_dataframe()
+rollup = dataiku.Dataset("rollup").get_dataframe()
 
-# ===============================
-# CLEAN COLUMNS
-# ===============================
-def clean(df):
+# ==============================
+# CLEAN COLUMN NAMES
+# ==============================
+for df in [hc_current, hc_last, mapping, rollup]:
     df.columns = df.columns.str.strip()
-    return df
 
-hc_current = clean(hc_current)
-hc_last = clean(hc_last)
-mapping = clean(mapping)
+# ==============================
+# DEBUG: SEE REAL STRUCTURE
+# ==============================
+print("\nMAPPING COLUMNS:")
+print(mapping.columns.tolist())
 
-# ===============================
-# DEBUG
-# ===============================
-print("\nMAPPING COLUMNS:", mapping.columns.tolist())
+# ==============================
+# 🔥 SPLIT MAPPING (IMPORTANT)
+# ==============================
 
-# ===============================
-# SPLIT MAPPING INTO 2 TABLES
-# ===============================
-
-# 1️⃣ BF → Cost Cat mapping
+# LEFT SIDE (BF mapping)
 bf_map = mapping[[
     "Business Function Lvl 6",
     "Cost Cat",
     "MT Domain",
     "MT-1 Domain"
-]].dropna()
+]].dropna(subset=["Business Function Lvl 6"])
 
-# 2️⃣ Employment Type → Contr mapping
+# RIGHT SIDE (EMP mapping)
 emp_map = mapping[[
     "Employment Type",
     "Contr/Non-Contr"
-]].dropna()
+]].dropna(subset=["Employment Type"])
 
-# ===============================
+# ==============================
+# NORMALIZE KEYS (CRITICAL)
+# ==============================
+for df in [hc_current, hc_last]:
+    df["Business Function Lvl 6"] = df["Business Function Lvl 6"].astype(str).str.strip().str.lower()
+    df["Employment Type"] = df["Employment Type"].astype(str).str.strip().str.lower()
+
+bf_map["Business Function Lvl 6"] = bf_map["Business Function Lvl 6"].astype(str).str.strip().str.lower()
+emp_map["Employment Type"] = emp_map["Employment Type"].astype(str).str.strip().str.lower()
+
+# ==============================
 # APPLY MAPPING
-# ===============================
-
-# Merge BF mapping
+# ==============================
 hc_current = hc_current.merge(bf_map, on="Business Function Lvl 6", how="left")
 hc_last = hc_last.merge(bf_map, on="Business Function Lvl 6", how="left")
 
-# Merge Employment mapping
 hc_current = hc_current.merge(emp_map, on="Employment Type", how="left")
 hc_last = hc_last.merge(emp_map, on="Employment Type", how="left")
 
-# ===============================
-# DEBUG AFTER MAPPING
-# ===============================
-print("\nAFTER MAPPING CURRENT COLS:", hc_current.columns.tolist())
+# ==============================
+# 🚨 DEBUG CHECK (VERY IMPORTANT)
+# ==============================
+print("\nAFTER MAPPING COLUMNS:")
+print(hc_current.columns.tolist())
 
-# ===============================
+if "Cost Cat" not in hc_current.columns:
+    raise Exception("❌ Cost Cat column STILL missing → mapping failed")
+
+print("\nNULL Cost Cat:", hc_current["Cost Cat"].isna().sum())
+
+# ==============================
 # GROUPING
-# ===============================
+# ==============================
 group_cols = ["Cost Cat", "MT Domain"]
 
 curr_sum = (
@@ -78,17 +88,17 @@ last_sum = (
     .rename(columns={"FTE": "HC_Last"})
 )
 
-# ===============================
-# MERGE
-# ===============================
+# ==============================
+# MERGE + NET CHANGE
+# ==============================
 summary = curr_sum.merge(last_sum, on=group_cols, how="outer").fillna(0)
 
 summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
 
-# ===============================
-# SAVE
-# ===============================
+# ==============================
+# SAVE OUTPUT
+# ==============================
 output = dataiku.Dataset("HC_Output")
 output.write_with_schema(summary)
 
-print("\n✅ SUCCESS — FINAL OUTPUT BUILT")
+print("\n✅ SUCCESS — NO MORE COST CAT ERROR")
