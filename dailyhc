@@ -4,7 +4,7 @@ import numpy as np
 from collections import defaultdict
 
 # ===============================
-# LOAD DATA
+# LOAD DATASETS (DATAIKU)
 # ===============================
 hc_curr_raw = dataiku.Dataset("hc_current_clean").get_dataframe()
 hc_last_raw = dataiku.Dataset("hc_last_clean").get_dataframe()
@@ -12,25 +12,19 @@ mapping = dataiku.Dataset("mapping").get_dataframe()
 rollup = dataiku.Dataset("rollup").get_dataframe()
 
 # ===============================
-# NORMALIZE ALL COLUMN NAMES
+# CLEAN COLUMN NAMES (VERY IMPORTANT)
 # ===============================
-def clean_cols(df):
+for df in [hc_curr_raw, hc_last_raw, mapping, rollup]:
     df.columns = df.columns.str.strip()
-    return df
-
-hc_curr_raw = clean_cols(hc_curr_raw)
-hc_last_raw = clean_cols(hc_last_raw)
-mapping = clean_cols(mapping)
-rollup = clean_cols(rollup)
 
 # ===============================
-# AUTO COLUMN DETECTION (SAFE)
+# AUTO COLUMN DETECTION (NO MORE ERRORS)
 # ===============================
 def find_col(df, keyword):
     for c in df.columns:
         if keyword.lower() in c.lower():
             return c
-    raise Exception(f"Column containing '{keyword}' not found in {df.columns}")
+    raise Exception(f"{keyword} not found in {df.columns}")
 
 COL_BANK_ID = find_col(hc_curr_raw, "bank")
 COL_BF_L6 = find_col(hc_curr_raw, "function")
@@ -38,7 +32,7 @@ COL_EMP_TYPE = find_col(hc_curr_raw, "employment")
 COL_FTE = find_col(hc_curr_raw, "fte")
 
 COL_COST_CAT = find_col(mapping, "cost")
-COL_MT_DOMAIN = find_col(mapping, "mt")
+COL_MT_DOMAIN = find_col(mapping, "mt domain")
 COL_MT1_DOMAIN = find_col(mapping, "mt-1")
 COL_CONTR = find_col(mapping, "contr")
 
@@ -98,8 +92,8 @@ snap_last = snapshot(hc_last, "last")
 # ===============================
 # ROLLUP
 # ===============================
-rollup_map = rollup.set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF].to_dict()
 rollup_ids = set(rollup[COL_ROLLUP_ID].astype(str))
+rollup_gbf_map = dict(zip(rollup[COL_ROLLUP_ID].astype(str), rollup[COL_ROLLUP_GBF]))
 
 # ===============================
 # COMBINE
@@ -122,7 +116,10 @@ for _, r in combined.iterrows():
         rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], move, r[COL_FTE+"_curr"]])
 
     elif has_last and not has_curr:
-        move = "TnO Leavers" if bid in rollup_map else "Left Bank"
+        if bid in rollup_gbf_map:
+            move = "TnO Leavers"
+        else:
+            move = "Left Bank"
         rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], move, r[COL_FTE+"_last"]])
 
     elif has_last and has_curr:
@@ -190,7 +187,7 @@ final_df = pd.concat(final + [grand], ignore_index=True)
 # ===============================
 # OUTPUT
 # ===============================
-output = dataiku.Dataset("final_output")
+output = dataiku.Dataset("HC_Output")
 output.write_with_schema(final_df)
 
-print("✅ FULL PIPELINE SUCCESS")
+print("✅ FULL DATAIKU PIPELINE SUCCESS")
