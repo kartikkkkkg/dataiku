@@ -1,46 +1,42 @@
 import dataiku
 import pandas as pd
-import numpy as np
 
-# ================================
-# DEBUG HELPER
-# ================================
-def debug_print(title, obj):
-    print("\n" + "="*50)
-    print(title)
-    print("="*50)
-    print(obj)
-
-def validate_columns(df, cols, name):
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise Exception(f"{name} missing columns: {missing}")
-
-# ================================
-# LOAD DATA
-# ================================
-hc_curr_raw = dataiku.Dataset("hc_current_clean").get_dataframe()
-hc_last_raw = dataiku.Dataset("hc_last_clean").get_dataframe()
+# ===============================
+# READ DATASETS
+# ===============================
+hc_current = dataiku.Dataset("hc_current_clean").get_dataframe()
+hc_last = dataiku.Dataset("hc_last_clean").get_dataframe()
 mapping = dataiku.Dataset("mapping").get_dataframe()
 rollup = dataiku.Dataset("rollup").get_dataframe()
 
-# ================================
-# CLEAN COLUMN NAMES
-# ================================
-hc_curr_raw.columns = hc_curr_raw.columns.str.strip()
-hc_last_raw.columns = hc_last_raw.columns.str.strip()
-mapping.columns = mapping.columns.str.strip()
-rollup.columns = rollup.columns.str.strip()
+# ===============================
+# CLEAN COLUMN NAMES (CRITICAL)
+# ===============================
+def clean_cols(df):
+    df.columns = df.columns.str.strip().str.replace('\n', '').str.replace('\r', '')
+    return df
 
-# DEBUG
-debug_print("HC CURRENT COLUMNS", hc_curr_raw.columns.tolist())
-debug_print("HC LAST COLUMNS", hc_last_raw.columns.tolist())
-debug_print("MAPPING COLUMNS", mapping.columns.tolist())
-debug_print("ROLLUP COLUMNS", rollup.columns.tolist())
+hc_current = clean_cols(hc_current)
+hc_last = clean_cols(hc_last)
+mapping = clean_cols(mapping)
+rollup = clean_cols(rollup)
 
-# ================================
-# COLUMN CONFIG (STRICT)
-# ================================
+# ===============================
+# DEBUG: PRINT COLUMNS
+# ===============================
+print("\n==== CURRENT COLUMNS ====")
+print(hc_current.columns.tolist())
+
+print("\n==== LAST COLUMNS ====")
+print(hc_last.columns.tolist())
+
+print("\n==== MAPPING COLUMNS ====")
+for c in mapping.columns:
+    print(f"[{c}]")
+
+# ===============================
+# STRICT COLUMN CONFIG
+# ===============================
 COL_BANK_ID = "Bank ID"
 COL_BF_L6 = "Business Function Lvl 6"
 COL_EMP_TYPE = "Employment Type"
@@ -51,207 +47,82 @@ COL_MT_DOMAIN = "MT Domain"
 COL_MT1_DOMAIN = "MT-1 Domain"
 COL_CONTR = "Contr/Non-Contr"
 
-COL_ROLLUP_ID = "Employee ID"
-COL_ROLLUP_GBF = "Global Business Function"
+# ===============================
+# VALIDATION CHECK
+# ===============================
+required_mapping_cols = [COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN, COL_CONTR]
 
-# ================================
-# VALIDATE INPUT STRUCTURE
-# ================================
-validate_columns(hc_curr_raw, [COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE, COL_FTE], "HC CURRENT")
-validate_columns(hc_last_raw, [COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE, COL_FTE], "HC LAST")
-validate_columns(mapping, [COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_EMP_TYPE, COL_CONTR], "MAPPING")
+for col in required_mapping_cols:
+    if col not in mapping.columns:
+        raise Exception(f"❌ MISSING COLUMN IN MAPPING: {col} | Found: {mapping.columns.tolist()}")
 
-# ================================
-# PREP MAPPING
-# ================================
-bf_map = mapping[[COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN]].drop_duplicates()
-emp_map = mapping[[COL_EMP_TYPE, COL_CONTR]].drop_duplicates()
+# ===============================
+# APPLY MAPPING (VERY IMPORTANT)
+# ===============================
+def apply_mapping(df):
+    df = df.copy()
 
-# CLEAN KEYS
-bf_map[COL_BF_L6] = bf_map[COL_BF_L6].astype(str).str.strip()
-emp_map[COL_EMP_TYPE] = emp_map[COL_EMP_TYPE].astype(str).str.strip()
-
-# DEBUG UNIQUE VALUES
-debug_print("HC BF SAMPLE", hc_curr_raw[COL_BF_L6].dropna().unique()[:10])
-debug_print("MAP BF SAMPLE", bf_map[COL_BF_L6].dropna().unique()[:10])
-
-# ================================
-# APPLY MAPPING
-# ================================
-def apply_mapping(df, name):
-    print(f"\n--- APPLYING MAPPING: {name} ---")
-
-    df = df[[COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE, COL_FTE]].copy()
-
-    df[COL_BANK_ID] = df[COL_BANK_ID].astype(str).str.strip()
-    df[COL_BF_L6] = df[COL_BF_L6].astype(str).str.strip()
-    df[COL_EMP_TYPE] = df[COL_EMP_TYPE].astype(str).str.strip()
-
-    df = df.merge(bf_map, on=COL_BF_L6, how="left")
-    df = df.merge(emp_map, on=COL_EMP_TYPE, how="left")
-
-    debug_print(f"{name} AFTER MERGE COLUMNS", df.columns.tolist())
-
-    # 🚨 CRITICAL CHECK
-    if COL_COST_CAT not in df.columns:
-        raise Exception(f"{name}: Cost Cat not created → mapping failed")
-
-    # CHECK NULLS
-    null_count = df[COL_COST_CAT].isna().sum()
-    print(f"{name}: NULL Cost Cat rows = {null_count}")
-
-    df.rename(columns={COL_CONTR: "ContrFlag"}, inplace=True)
-    df["MT_CC"] = df[COL_MT_DOMAIN].astype(str) + "-" + df[COL_COST_CAT].astype(str)
+    # Merge mapping
+    df = df.merge(
+        mapping[[COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN, COL_CONTR]],
+        on=COL_BF_L6,
+        how="left"
+    )
 
     return df
 
-hc_curr = apply_mapping(hc_curr_raw, "CURRENT")
-hc_last = apply_mapping(hc_last_raw, "LAST")
+hc_current = apply_mapping(hc_current)
+hc_last = apply_mapping(hc_last)
 
-# ================================
-# SNAPSHOT
-# ================================
-def snapshot(df, suffix):
-    cols = [COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, COL_EMP_TYPE, "ContrFlag", COL_FTE]
-    df = df[cols].copy()
-    df = df.sort_values(COL_BANK_ID).drop_duplicates(COL_BANK_ID, keep="last")
-    df = df.add_suffix("_" + suffix)
-    df.rename(columns={COL_BANK_ID + "_" + suffix: COL_BANK_ID}, inplace=True)
-    return df
+print("\n==== AFTER MAPPING CURRENT ====")
+print(hc_current.columns.tolist())
 
-curr = snapshot(hc_curr, "curr")
-last = snapshot(hc_last, "last")
+# ===============================
+# GROUPING
+# ===============================
+group_cols = [COL_COST_CAT, COL_MT_DOMAIN]
 
-combined = last.merge(curr, on=COL_BANK_ID, how="outer")
+for col in group_cols:
+    if col not in hc_current.columns:
+        raise Exception(f"{col} missing in hc_current after mapping")
+    if col not in hc_last.columns:
+        raise Exception(f"{col} missing in hc_last after mapping")
 
-debug_print("COMBINED SAMPLE", combined.head())
+curr_sum = (
+    hc_current.groupby(group_cols)[COL_FTE]
+    .sum()
+    .reset_index()
+    .rename(columns={COL_FTE: "HC_Current"})
+)
 
-# ================================
-# MOVEMENTS
-# ================================
-rows = []
+last_sum = (
+    hc_last.groupby(group_cols)[COL_FTE]
+    .sum()
+    .reset_index()
+    .rename(columns={COL_FTE: "HC_Last"})
+)
 
-for _, r in combined.iterrows():
-    bid = r[COL_BANK_ID]
-
-    has_last = pd.notna(r.get("MT_CC_last"))
-    has_curr = pd.notna(r.get("MT_CC_curr"))
-
-    if has_curr and not has_last:
-        rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], "Joiner", r["FTE_curr"]])
-
-    elif has_last and not has_curr:
-        rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], "Leaver", r["FTE_last"]])
-
-    elif has_last and has_curr:
-        if r["MT_CC_last"] != r["MT_CC_curr"]:
-            rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], "Transfer In", r["FTE_curr"]])
-            rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], "Transfer Out", r["FTE_last"]])
-
-movements = pd.DataFrame(rows, columns=[
-    COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement", "FTE"
-])
-
-debug_print("MOVEMENTS SAMPLE", movements.head())
-
-# ================================
-# SUMMARY
-# ================================
-curr_sum = hc_curr.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"])\
-    .agg(HC_Current=(COL_FTE, "sum")).reset_index()
-
-last_sum = hc_last.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"])\
-    .agg(HC_Last=(COL_FTE, "sum")).reset_index()
-
-summary = curr_sum.merge(last_sum, on=[COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"], how="outer").fillna(0)
+# ===============================
+# MERGE CURRENT + LAST
+# ===============================
+summary = curr_sum.merge(
+    last_sum,
+    on=group_cols,
+    how="outer"
+).fillna(0)
 
 summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
 
-debug_print("SUMMARY SAMPLE", summary.head())
-
-# ================================
-# COMMENTS
-# ================================
-comments = movements.groupby("MT_CC")["Movement"].apply(lambda x: ", ".join(x)).reset_index()
-comments.columns = ["MT_CC", "Comments"]
-
-summary = summary.merge(comments, on="MT_CC", how="left").fillna("")
-
-# ================================
+# ===============================
 # FINAL OUTPUT
-# ================================
-summary["HC_Current"] = summary["HC_Current"].round(0).astype(int)
-summary["HC_Last"] = summary["HC_Last"].round(0).astype(int)
-summary["Net Change"] = summary["Net Change"].round(0).astype(int)
+# ===============================
+print("\n==== FINAL SUMMARY SAMPLE ====")
+print(summary.head())
 
-final = summary[[COL_COST_CAT, COL_MT_DOMAIN, "HC_Last", "HC_Current", "Net Change", "Comments"]]
-
-debug_print("FINAL OUTPUT", final.head())
-
-# ================================
-# SAVE
-# ================================
+# ===============================
+# SAVE OUTPUT
+# ===============================
 output = dataiku.Dataset("HC_Output")
-output.write_with_schema(final)
+output.write_with_schema(summary)
 
-print("\n✅ SUCCESS — FLOW BUILT")rows = []
-
-for _, r in combined.iterrows():
-    bid = r[COL_BANK_ID]
-
-    has_last = pd.notna(r.get("MT_CC_last"))
-    has_curr = pd.notna(r.get("MT_CC_curr"))
-
-    fte_last = r.get("FTE_last", 0)
-    fte_curr = r.get("FTE_curr", 0)
-
-    if has_curr and not has_last:
-        rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], "Joiner", fte_curr])
-
-    elif has_last and not has_curr:
-        rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], "Leaver", fte_last])
-
-    elif has_last and has_curr:
-        if r["MT_CC_last"] != r["MT_CC_curr"]:
-            rows.append([bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], "Transfer In", fte_curr])
-            rows.append([bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"], "Transfer Out", fte_last])
-
-movements = pd.DataFrame(rows, columns=[
-    COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement", "FTE"
-])
-
-# ================================
-# SUMMARY
-# ================================
-curr_sum = hc_curr.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"])\
-    .agg(HC_Current=(COL_FTE, "sum")).reset_index()
-
-last_sum = hc_last.groupby([COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"])\
-    .agg(HC_Last=(COL_FTE, "sum")).reset_index()
-
-summary = curr_sum.merge(last_sum, on=[COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"], how="outer").fillna(0)
-
-summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
-
-# ================================
-# COMMENTS (simple version)
-# ================================
-comments = movements.groupby("MT_CC")["Movement"].apply(lambda x: ", ".join(x)).reset_index()
-comments.columns = ["MT_CC", "Comments"]
-
-summary = summary.merge(comments, on="MT_CC", how="left").fillna("")
-
-# ================================
-# FINAL CLEAN
-# ================================
-summary["HC_Current"] = summary["HC_Current"].round(0).astype(int)
-summary["HC_Last"] = summary["HC_Last"].round(0).astype(int)
-summary["Net Change"] = summary["Net Change"].round(0).astype(int)
-
-final = summary[[COL_COST_CAT, COL_MT_DOMAIN, "HC_Last", "HC_Current", "Net Change", "Comments"]]
-
-# ================================
-# OUTPUT TO DATAIKU
-# ================================
-output = dataiku.Dataset("HC_Output")
-output.write_with_schema(final)
+print("\n✅ SUCCESS — FLOW BUILT")
