@@ -2,127 +2,93 @@ import dataiku
 import pandas as pd
 
 # ===============================
-# READ DATASETS
+# READ DATA
 # ===============================
 hc_current = dataiku.Dataset("hc_current_clean").get_dataframe()
 hc_last = dataiku.Dataset("hc_last_clean").get_dataframe()
 mapping = dataiku.Dataset("mapping").get_dataframe()
-rollup = dataiku.Dataset("rollup").get_dataframe()
 
 # ===============================
-# CLEAN COLUMN NAMES (CRITICAL)
+# CLEAN COLUMNS
 # ===============================
-def clean_cols(df):
-    df.columns = df.columns.str.strip().str.replace('\n', '').str.replace('\r', '')
+def clean(df):
+    df.columns = df.columns.str.strip()
     return df
 
-hc_current = clean_cols(hc_current)
-hc_last = clean_cols(hc_last)
-mapping = clean_cols(mapping)
-rollup = clean_cols(rollup)
+hc_current = clean(hc_current)
+hc_last = clean(hc_last)
+mapping = clean(mapping)
 
 # ===============================
-# DEBUG: PRINT COLUMNS
+# DEBUG
 # ===============================
-print("\n==== CURRENT COLUMNS ====")
-print(hc_current.columns.tolist())
-
-print("\n==== LAST COLUMNS ====")
-print(hc_last.columns.tolist())
-
-print("\n==== MAPPING COLUMNS ====")
-for c in mapping.columns:
-    print(f"[{c}]")
+print("\nMAPPING COLUMNS:", mapping.columns.tolist())
 
 # ===============================
-# STRICT COLUMN CONFIG
+# SPLIT MAPPING INTO 2 TABLES
 # ===============================
-COL_BANK_ID = "Bank ID"
-COL_BF_L6 = "Business Function Lvl 6"
-COL_EMP_TYPE = "Employment Type"
-COL_FTE = "FTE"
 
-COL_COST_CAT = "Cost Cat"
-COL_MT_DOMAIN = "MT Domain"
-COL_MT1_DOMAIN = "MT-1 Domain"
-COL_CONTR = "Contr/Non-Contr"
+# 1️⃣ BF → Cost Cat mapping
+bf_map = mapping[[
+    "Business Function Lvl 6",
+    "Cost Cat",
+    "MT Domain",
+    "MT-1 Domain"
+]].dropna()
 
-# ===============================
-# VALIDATION CHECK
-# ===============================
-required_mapping_cols = [COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN, COL_CONTR]
-
-for col in required_mapping_cols:
-    if col not in mapping.columns:
-        raise Exception(f"❌ MISSING COLUMN IN MAPPING: {col} | Found: {mapping.columns.tolist()}")
+# 2️⃣ Employment Type → Contr mapping
+emp_map = mapping[[
+    "Employment Type",
+    "Contr/Non-Contr"
+]].dropna()
 
 # ===============================
-# APPLY MAPPING (VERY IMPORTANT)
+# APPLY MAPPING
 # ===============================
-def apply_mapping(df):
-    df = df.copy()
 
-    # Merge mapping
-    df = df.merge(
-        mapping[[COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN, COL_CONTR]],
-        on=COL_BF_L6,
-        how="left"
-    )
+# Merge BF mapping
+hc_current = hc_current.merge(bf_map, on="Business Function Lvl 6", how="left")
+hc_last = hc_last.merge(bf_map, on="Business Function Lvl 6", how="left")
 
-    return df
+# Merge Employment mapping
+hc_current = hc_current.merge(emp_map, on="Employment Type", how="left")
+hc_last = hc_last.merge(emp_map, on="Employment Type", how="left")
 
-hc_current = apply_mapping(hc_current)
-hc_last = apply_mapping(hc_last)
-
-print("\n==== AFTER MAPPING CURRENT ====")
-print(hc_current.columns.tolist())
+# ===============================
+# DEBUG AFTER MAPPING
+# ===============================
+print("\nAFTER MAPPING CURRENT COLS:", hc_current.columns.tolist())
 
 # ===============================
 # GROUPING
 # ===============================
-group_cols = [COL_COST_CAT, COL_MT_DOMAIN]
-
-for col in group_cols:
-    if col not in hc_current.columns:
-        raise Exception(f"{col} missing in hc_current after mapping")
-    if col not in hc_last.columns:
-        raise Exception(f"{col} missing in hc_last after mapping")
+group_cols = ["Cost Cat", "MT Domain"]
 
 curr_sum = (
-    hc_current.groupby(group_cols)[COL_FTE]
+    hc_current.groupby(group_cols)["FTE"]
     .sum()
     .reset_index()
-    .rename(columns={COL_FTE: "HC_Current"})
+    .rename(columns={"FTE": "HC_Current"})
 )
 
 last_sum = (
-    hc_last.groupby(group_cols)[COL_FTE]
+    hc_last.groupby(group_cols)["FTE"]
     .sum()
     .reset_index()
-    .rename(columns={COL_FTE: "HC_Last"})
+    .rename(columns={"FTE": "HC_Last"})
 )
 
 # ===============================
-# MERGE CURRENT + LAST
+# MERGE
 # ===============================
-summary = curr_sum.merge(
-    last_sum,
-    on=group_cols,
-    how="outer"
-).fillna(0)
+summary = curr_sum.merge(last_sum, on=group_cols, how="outer").fillna(0)
 
 summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
 
 # ===============================
-# FINAL OUTPUT
-# ===============================
-print("\n==== FINAL SUMMARY SAMPLE ====")
-print(summary.head())
-
-# ===============================
-# SAVE OUTPUT
+# SAVE
 # ===============================
 output = dataiku.Dataset("HC_Output")
 output.write_with_schema(summary)
 
-print("\n✅ SUCCESS — FLOW BUILT")
+print("\n✅ SUCCESS — FINAL OUTPUT BUILT")
