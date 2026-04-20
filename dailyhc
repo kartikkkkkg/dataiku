@@ -1,0 +1,228 @@
+import dataiku
+import pandas as pd
+import numpy as np
+from datetime import date, timedelta
+import calendar
+from collections import defaultdict
+
+# ===============================
+# LOAD DATA FROM DATAIKU
+# ===============================
+hc_curr_raw = dataiku.Dataset("hc_current_clean").get_dataframe()
+hc_last_raw = dataiku.Dataset("hc_last_clean").get_dataframe()
+mapping = dataiku.Dataset("mapping").get_dataframe()
+rollup = dataiku.Dataset("rollup").get_dataframe()
+
+# ===============================
+# CONSTANTS (SAME AS YOUR SCRIPT)
+# ===============================
+COL_BANK_ID = "Bank ID"
+COL_BF_L6 = "Business Function Lvl 6"
+COL_EMP_TYPE = "Employment Type"
+COL_FTE = "FTE"
+
+COL_COST_CAT = "Cost Cat"
+COL_MT_DOMAIN = "MT Domain"
+COL_MT1_DOMAIN = "MT-1 Domain"
+COL_CONTR = "Contr/Non-Contr"
+
+COL_ROLLUP_ID = "Employee ID"
+COL_ROLLUP_GBF = "Global Business Function"
+
+CONTR_CONT = "Controllable"
+CONTR_NON = "Non-Controllable"
+
+COST_CAT_ORDER = ["BAU", "CIO Mgmt", "TPS", "Proj"]
+
+TOTAL_LABELS = {
+    "BAU": "BAU TOTAL",
+    "CIO Mgmt": "CIO MGMT TOTAL",
+    "TPS": "TPS TOTAL",
+    "Proj": "PROJ TOTAL",
+}
+
+GRAND_TOTAL_LABEL = "GRAND TOTAL"
+COMMENT_THRESHOLD = 10
+
+# ===============================
+# CLEAN
+# ===============================
+for df in [hc_curr_raw, hc_last_raw, mapping]:
+    df.columns = df.columns.str.strip()
+
+# ===============================
+# MAPPING
+# ===============================
+bf_map = mapping[[COL_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN]].drop_duplicates()
+emp_map = mapping[[COL_EMP_TYPE, COL_CONTR]].drop_duplicates()
+
+def apply_mapping(df):
+    df = df[[COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE, COL_FTE]].copy()
+    df[COL_BANK_ID] = df[COL_BANK_ID].astype(str).str.strip()
+
+    df = df.merge(bf_map, on=COL_BF_L6, how="left")
+    df = df.merge(emp_map, on=COL_EMP_TYPE, how="left")
+
+    df.rename(columns={COL_CONTR: "ContrFlag"}, inplace=True)
+    df["MT_CC"] = df[COL_MT_DOMAIN].astype(str) + "-" + df[COL_COST_CAT].astype(str)
+
+    return df
+
+hc_curr = apply_mapping(hc_curr_raw)
+hc_last = apply_mapping(hc_last_raw)
+
+# ===============================
+# SNAPSHOT
+# ===============================
+def snapshot(df, suffix):
+    cols = [COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, COL_EMP_TYPE, "ContrFlag", COL_FTE]
+    df = df[cols].copy()
+    df = df.sort_values(COL_BANK_ID).drop_duplicates(COL_BANK_ID, keep="last")
+    df = df.add_suffix("_" + suffix)
+    df.rename(columns={COL_BANK_ID + "_" + suffix: COL_BANK_ID}, inplace=True)
+    return df
+
+snap_curr = snapshot(hc_curr, "curr")
+snap_last = snapshot(hc_last, "last")
+
+# ===============================
+# ROLLUP
+# ===============================
+rollup_map = rollup.set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF].to_dict()
+rollup_ids = set(rollup[COL_ROLLUP_ID].astype(str))
+
+# ===============================
+# COMBINE
+# ===============================
+combined = snap_last.merge(snap_curr, on=COL_BANK_ID, how="outer")
+
+# ===============================
+# MOVEMENTS (FULL SAME LOGIC)
+# ===============================
+rows = []
+
+def add_row(bid, mt_cc, cost, mt, move, fte, emp, contr, frm=None, to=None):
+    if pd.isna(fte) or fte == 0:
+        return
+    rows.append({
+        COL_BANK_ID: bid,
+        "MT_CC": mt_cc,
+        COL_COST_CAT: cost,
+        COL_MT_DOMAIN: mt,
+        "Movement": move,
+        "FTE": float(fte),
+        "EmpType": emp,
+        "ContrSide": contr,
+        "From": frm,
+        "To": to
+    })
+
+for _, r in combined.iterrows():
+    bid = r[COL_BANK_ID]
+
+    has_last = pd.notna(r.get("MT_CC_last"))
+    has_curr = pd.notna(r.get("MT_CC_curr"))
+
+    if has_curr and not has_last:
+        move = "Non TnO Joiners" if bid in rollup_ids else "New Joiners"
+        add_row(bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"], move,
+                r[COL_FTE+"_curr"], r[COL_EMP_TYPE+"_curr"], r["ContrFlag_curr"])
+
+    elif has_last and not has_curr:
+        gbf = rollup_map.get(bid)
+        if gbf:
+            add_row(bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"],
+                    "TnO Leavers", r[COL_FTE+"_last"], r[COL_EMP_TYPE+"_last"], r["ContrFlag_last"], to=gbf)
+        else:
+            add_row(bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"],
+                    "Left Bank", r[COL_FTE+"_last"], r[COL_EMP_TYPE+"_last"], r["ContrFlag_last"])
+
+    elif has_last and has_curr:
+        if r["MT_CC_last"] == r["MT_CC_curr"]:
+            if r["ContrFlag_last"] != r["ContrFlag_curr"]:
+                if r["ContrFlag_curr"] == CONTR_CONT:
+                    move = "Conversion in"
+                else:
+                    move = "Conversion out"
+                add_row(bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"],
+                        move, r[COL_FTE+"_curr"], r[COL_EMP_TYPE+"_curr"], r["ContrFlag_curr"])
+        else:
+            add_row(bid, r["MT_CC_last"], r[COL_COST_CAT+"_last"], r[COL_MT_DOMAIN+"_last"],
+                    "Transfer out", r[COL_FTE+"_last"], r[COL_EMP_TYPE+"_last"], r["ContrFlag_last"],
+                    to=r["MT_CC_curr"])
+
+            add_row(bid, r["MT_CC_curr"], r[COL_COST_CAT+"_curr"], r[COL_MT_DOMAIN+"_curr"],
+                    "Transfer in", r[COL_FTE+"_curr"], r[COL_EMP_TYPE+"_curr"], r["ContrFlag_curr"],
+                    frm=r["MT_CC_last"])
+
+movements = pd.DataFrame(rows)
+
+# ===============================
+# COMMENTS (FULL)
+# ===============================
+df = movements[movements["ContrSide"] == CONTR_CONT].copy()
+
+comments = df.groupby(["MT_CC", "Movement"])["FTE"].sum().reset_index()
+
+comment_text = (
+    comments.groupby("MT_CC")
+    .apply(lambda x: "\n".join([f"{m} - {int(f)}" for m,f in zip(x["Movement"], x["FTE"])]))
+    .reset_index(name="Comments")
+)
+
+# ===============================
+# SUMMARY
+# ===============================
+curr_sum = hc_curr[hc_curr["ContrFlag"]==CONTR_CONT].groupby(
+    [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
+).agg(HC_Current=(COL_FTE,"sum")).reset_index()
+
+last_sum = hc_last[hc_last["ContrFlag"]==CONTR_CONT].groupby(
+    [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
+).agg(HC_Last=(COL_FTE,"sum")).reset_index()
+
+summary = curr_sum.merge(last_sum, on=[COL_COST_CAT, COL_MT_DOMAIN,"MT_CC"], how="outer").fillna(0)
+
+summary["Net Change"] = summary["HC_Current"] - summary["HC_Last"]
+
+summary = summary.merge(comment_text, on="MT_CC", how="left").fillna("")
+
+summary.loc[summary["Net Change"].abs() <= COMMENT_THRESHOLD, "Comments"] = ""
+
+# ===============================
+# TOTALS
+# ===============================
+final = []
+for cat in COST_CAT_ORDER:
+    block = summary[summary[COL_COST_CAT]==cat]
+    if block.empty:
+        continue
+    final.append(block)
+
+    final.append(pd.DataFrame([{
+        COL_COST_CAT: TOTAL_LABELS[cat],
+        COL_MT_DOMAIN: "",
+        "HC_Current": block["HC_Current"].sum(),
+        "HC_Last": block["HC_Last"].sum(),
+        "Net Change": block["Net Change"].sum(),
+        "Comments": ""
+    }]))
+
+grand = pd.DataFrame([{
+    COL_COST_CAT: GRAND_TOTAL_LABEL,
+    COL_MT_DOMAIN: "",
+    "HC_Current": summary["HC_Current"].sum(),
+    "HC_Last": summary["HC_Last"].sum(),
+    "Net Change": summary["Net Change"].sum(),
+    "Comments": ""
+}])
+
+final_df = pd.concat(final + [grand], ignore_index=True)
+
+# ===============================
+# OUTPUT
+# ===============================
+output = dataiku.Dataset("final_output")
+output.write_with_schema(final_df)
+
+print("✅ FULL REPORT GENERATED (NO EMAIL)")
