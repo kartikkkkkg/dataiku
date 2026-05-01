@@ -1,50 +1,50 @@
 import dataiku
 import pandas as pd
+from io import BytesIO
 
 # Load datasets
 report = dataiku.Dataset("report_clean").get_dataframe()
-hc = dataiku.Dataset("HC_Data_Clean").get_dataframe()
-joiners = dataiku.Dataset("New_Joiners_Clean").get_dataframe()
-leavers = dataiku.Dataset("Leavers_Clean").get_dataframe()
-transfers = dataiku.Dataset("Transfers_Clean").get_dataframe()
+hc_data = dataiku.Dataset("HC_Data_Clean").get_dataframe()
+nj_data = dataiku.Dataset("New_Joiners_Clean").get_dataframe()
+lv_data = dataiku.Dataset("Leavers_Clean").get_dataframe()
+jr_data = dataiku.Dataset("JR_Clean").get_dataframe()
+fg_data = dataiku.Dataset("Fieldglass_Clean").get_dataframe()
+tf_data = dataiku.Dataset("Transfers_Clean").get_dataframe()
 
-# Folder output
-folder = dataiku.Folder("mt_domain_output")
+# Managed folder
+folder = dataiku.Folder("mt_domain_output")  # ⚠️ if this fails, use folder ID
 
-# Normalize helper
-def normalize(series):
-    return series.astype(str).str.strip().str.upper()
-
-# Get MT Domains
-mt_list = normalize(report["MT Domain"]).dropna().unique()
+# Get MT domains
+mt_list = report["MT Domain"].dropna().unique()
 
 for mt in mt_list:
 
-    safe_mt = str(mt).replace(" ", "_").replace("/", "_")
+    # Filter per MT
+    df = report[report["MT Domain"] == mt]
+    df1 = hc_data[hc_data["MT Domain"] == mt]
+    df2 = nj_data[nj_data["MT Domain"] == mt]
+    df3 = lv_data[lv_data["MT Domain"] == mt]
+    df4 = jr_data[jr_data["MT Domain"] == mt]
+    df5 = fg_data[fg_data["MT Domain"] == mt]
+    df6 = tf_data[tf_data["MT Domain"] == mt]
 
-    # Filter datasets
-    r = report[normalize(report["MT Domain"]) == mt]
-    h = hc[normalize(hc["MT Domain"]) == mt]
-    j = joiners[normalize(joiners["MT Domain"]) == mt]
-    l = leavers[normalize(leavers["MT Domain"]) == mt]
+    # Clean filename
+    safe_mt = str(mt).replace("/", "_").replace(" ", "_")
 
-    cond1 = normalize(transfers["MT Domain(To)"]) == mt
-    cond2 = normalize(transfers["MT Domain (actual)"]) == mt
-    t = transfers[cond1 | cond2]
+    # Create Excel in memory
+    stream = BytesIO()
 
-    # 🔥 Write Excel in temp
-    file_path = f"/tmp/{safe_mt}.xlsx"
+    with pd.ExcelWriter(stream, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Report")
+        df1.to_excel(writer, index=False, sheet_name="HC Data")
+        df2.to_excel(writer, index=False, sheet_name="New Joiners")
+        df3.to_excel(writer, index=False, sheet_name="Leavers")
+        df4.to_excel(writer, index=False, sheet_name="JR")
+        df5.to_excel(writer, index=False, sheet_name="Fieldglass")
+        df6.to_excel(writer, index=False, sheet_name="Transfers")
 
-    writer = pd.ExcelWriter(file_path, engine="xlsxwriter")
+    stream.seek(0)
 
-    r.to_excel(writer, sheet_name="Report", index=False)
-    h.to_excel(writer, sheet_name="HC Data", index=False)
-    j.to_excel(writer, sheet_name="New Joiners", index=False)
-    l.to_excel(writer, sheet_name="Leavers", index=False)
-    t.to_excel(writer, sheet_name="Transfers", index=False)
-
-    writer.close()
-
-    # Upload to Dataiku folder
-    with open(file_path, "rb") as f:
-        folder.upload_stream(f"{safe_mt}.xlsx", f)
+    # Save file
+    with folder.get_writer(f"{safe_mt}.xlsx") as f:
+        f.write(stream.read())
