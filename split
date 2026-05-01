@@ -1,57 +1,40 @@
 import dataiku
 import pandas as pd
-import io
+import os
 
-folder = dataiku.Folder("Reporttt")
-
-# Read datasets
+# Load datasets
 report = dataiku.Dataset("report_clean").get_dataframe()
 hc = dataiku.Dataset("HC_Data_Clean").get_dataframe()
-nj = dataiku.Dataset("New_Joiners_Clean").get_dataframe()
-lv = dataiku.Dataset("Leavers_Clean").get_dataframe()
-jr = dataiku.Dataset("JR_Clean").get_dataframe()
-fg = dataiku.Dataset("Fieldglass_Clean").get_dataframe()
-tr = dataiku.Dataset("Transfers_Clean").get_dataframe()
+joiners = dataiku.Dataset("New_Joiners_Clean").get_dataframe()
+leavers = dataiku.Dataset("Leavers_Clean").get_dataframe()
+transfers = dataiku.Dataset("Transfers_Clean").get_dataframe()
 
-mts = hc["MT Domain"].dropna().unique()
-skip = ["OPS WRB", "OPS CIB", "FCSO"]
-mts = [m for m in mts if m not in skip]
+# Folder
+folder = dataiku.Folder("mt_domain_excels")
+base_path = folder.get_path()
 
-def write_one_file(mt):
+mt_list = report['MT Domain'].dropna().unique()
 
-    buffer = io.StringIO()
+for mt in mt_list:
 
-    # Write each section with headers
-    buffer.write("=== REPORT ===\n")
-    report[report["MT Domain"] == mt].to_csv(buffer, index=False)
+    safe_mt = str(mt).replace(" ", "_").replace("/", "_")
 
-    buffer.write("\n=== HC DATA ===\n")
-    hc[hc["MT Domain"] == mt].to_csv(buffer, index=False)
+    # Filter each dataset
+    r = report[report['MT Domain'] == mt].copy()
+    h = hc[hc['MT Domain'] == mt].copy()
+    j = joiners[joiners['MT Domain'] == mt].copy()
+    l = leavers[leavers['MT Domain'] == mt].copy()
+    t = transfers[transfers['MT Domain'] == mt].copy()
 
-    buffer.write("\n=== NEW JOINERS ===\n")
-    nj[nj["MT Domain"] == mt].to_csv(buffer, index=False)
+    # Add sheet indicator
+    r['Sheet'] = 'Report'
+    h['Sheet'] = 'HC_Data'
+    j['Sheet'] = 'Joiners'
+    l['Sheet'] = 'Leavers'
+    t['Sheet'] = 'Transfers'
 
-    buffer.write("\n=== LEAVERS ===\n")
-    lv[lv["MT Domain"] == mt].to_csv(buffer, index=False)
+    # Combine all
+    final_df = pd.concat([r, h, j, l, t], ignore_index=True)
 
-    buffer.write("\n=== JR ===\n")
-    jr[jr["MT Domain"] == mt].to_csv(buffer, index=False)
-
-    buffer.write("\n=== FIELDGLASS ===\n")
-    fg[fg["MT Domain"] == mt].to_csv(buffer, index=False)
-
-    tr_f = tr[
-        (tr["MT Domain(To)"] == mt) |
-        (tr["MT Domain (actual)"] == mt)
-    ]
-
-    buffer.write("\n=== TRANSFERS ===\n")
-    tr_f.to_csv(buffer, index=False)
-
-    with folder.get_writer(f"{mt}.csv") as f:
-        f.write(buffer.getvalue().encode("utf-8"))
-
-for mt in mts:
-    write_one_file(mt)
-
-print("Done — 1 file per MT created")
+    # Save single CSV per MT
+    final_df.to_csv(f"{base_path}/{safe_mt}.csv", index=False)
