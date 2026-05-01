@@ -8,38 +8,43 @@ joiners = dataiku.Dataset("New_Joiners_Clean").get_dataframe()
 leavers = dataiku.Dataset("Leavers_Clean").get_dataframe()
 transfers = dataiku.Dataset("Transfers_Clean").get_dataframe()
 
+# Folder output
 folder = dataiku.Folder("mt_domain_output")
 
+# Normalize helper
 def normalize(series):
     return series.astype(str).str.strip().str.upper()
 
-# Get MT list
-mts = normalize(hc["MT Domain"]).dropna().unique()
+# Get MT Domains
+mt_list = normalize(report["MT Domain"]).dropna().unique()
 
-for mt in mts:
+for mt in mt_list:
 
     safe_mt = str(mt).replace(" ", "_").replace("/", "_")
 
-    # Apply same filtering logic as your local code
-    r = report[normalize(report["MT Domain"]) == mt].copy()
-    h = hc[normalize(hc["MT Domain"]) == mt].copy()
-    j = joiners[normalize(joiners["MT Domain"]) == mt].copy()
-    l = leavers[normalize(leavers["MT Domain"]) == mt].copy()
+    # Filter datasets
+    r = report[normalize(report["MT Domain"]) == mt]
+    h = hc[normalize(hc["MT Domain"]) == mt]
+    j = joiners[normalize(joiners["MT Domain"]) == mt]
+    l = leavers[normalize(leavers["MT Domain"]) == mt]
 
     cond1 = normalize(transfers["MT Domain(To)"]) == mt
     cond2 = normalize(transfers["MT Domain (actual)"]) == mt
-    t = transfers[cond1 | cond2].copy()
+    t = transfers[cond1 | cond2]
 
-    # Add sheet names (VERY IMPORTANT)
-    r["Sheet"] = "Report"
-    h["Sheet"] = "HC Data"
-    j["Sheet"] = "New Joiners"
-    l["Sheet"] = "Leavers"
-    t["Sheet"] = "Transfers"
+    # 🔥 Write Excel in temp
+    file_path = f"/tmp/{safe_mt}.xlsx"
 
-    final_df = pd.concat([r, h, j, l, t], ignore_index=True)
+    writer = pd.ExcelWriter(file_path, engine="xlsxwriter")
 
-    folder.upload_stream(
-        f"{safe_mt}.csv",
-        final_df.to_csv(index=False).encode("utf-8")
-    )
+    r.to_excel(writer, sheet_name="Report", index=False)
+    h.to_excel(writer, sheet_name="HC Data", index=False)
+    j.to_excel(writer, sheet_name="New Joiners", index=False)
+    l.to_excel(writer, sheet_name="Leavers", index=False)
+    t.to_excel(writer, sheet_name="Transfers", index=False)
+
+    writer.close()
+
+    # Upload to Dataiku folder
+    with open(file_path, "rb") as f:
+        folder.upload_stream(f"{safe_mt}.xlsx", f)
