@@ -1,0 +1,45 @@
+import dataiku
+import pandas as pd
+import zipfile
+import io
+
+# Load datasets
+report = dataiku.Dataset("report_clean").get_dataframe()
+hc = dataiku.Dataset("HC_Data_Clean").get_dataframe()
+joiners = dataiku.Dataset("New_Joiners_Clean").get_dataframe()
+leavers = dataiku.Dataset("Leavers_Clean").get_dataframe()
+transfers = dataiku.Dataset("Transfers_Clean").get_dataframe()
+
+folder = dataiku.Folder("mt_domain_output")
+
+def normalize(series):
+    return series.astype(str).str.strip().str.upper()
+
+mt_list = normalize(report["MT Domain"]).dropna().unique()
+
+for mt in mt_list:
+
+    safe_mt = str(mt).replace(" ", "_").replace("/", "_")
+
+    # Filter
+    r = report[normalize(report["MT Domain"]) == mt]
+    h = hc[normalize(hc["MT Domain"]) == mt]
+    j = joiners[normalize(joiners["MT Domain"]) == mt]
+    l = leavers[normalize(leavers["MT Domain"]) == mt]
+
+    cond1 = normalize(transfers["MT Domain(To)"]) == mt
+    cond2 = normalize(transfers["MT Domain (actual)"]) == mt
+    t = transfers[cond1 | cond2]
+
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr("Report.csv", r.to_csv(index=False))
+        z.writestr("HC_Data.csv", h.to_csv(index=False))
+        z.writestr("New_Joiners.csv", j.to_csv(index=False))
+        z.writestr("Leavers.csv", l.to_csv(index=False))
+        z.writestr("Transfers.csv", t.to_csv(index=False))
+
+    # Upload
+    folder.upload_stream(f"{safe_mt}.zip", zip_buffer.getvalue())
