@@ -1,6 +1,8 @@
 import dataiku
 import pandas as pd
+import io
 
+# Folder (make sure name matches Inputs/Outputs exactly)
 folder = dataiku.Folder("Reporttt")
 
 # Read datasets
@@ -12,37 +14,43 @@ jr = dataiku.Dataset("JR_Clean").get_dataframe()
 fg = dataiku.Dataset("Fieldglass_Clean").get_dataframe()
 tr = dataiku.Dataset("Transfers_Clean").get_dataframe()
 
+# Get MT domains
 mts = hc["MT Domain"].dropna().unique()
+
+# Remove unwanted domains
 skip = ["OPS WRB", "OPS CIB", "FCSO"]
 mts = [m for m in mts if m not in skip]
 
+# Helper function to write CSV to Dataiku folder
+def write_csv(df, filename):
+    with folder.get_writer(filename) as f:
+        buffer = io.StringIO()
+        df.to_csv(buffer, index=False)
+        f.write(buffer.getvalue().encode("utf-8"))
+
+# Loop for each MT
 for mt in mts:
 
-    # Write each sheet as separate CSV
-    with folder.get_writer(f"{mt}_Report.csv") as f:
-        report[report["MT Domain"] == mt].to_csv(f, index=False)
+    # Filter datasets
+    report_f = report[report["MT Domain"] == mt]
+    hc_f = hc[hc["MT Domain"] == mt]
+    nj_f = nj[nj["MT Domain"] == mt]
+    lv_f = lv[lv["MT Domain"] == mt]
+    jr_f = jr[jr["MT Domain"] == mt]
+    fg_f = fg[fg["MT Domain"] == mt]
 
-    with folder.get_writer(f"{mt}_HC_Data.csv") as f:
-        hc[hc["MT Domain"] == mt].to_csv(f, index=False)
-
-    with folder.get_writer(f"{mt}_New_Joiners.csv") as f:
-        nj[nj["MT Domain"] == mt].to_csv(f, index=False)
-
-    with folder.get_writer(f"{mt}_Leavers.csv") as f:
-        lv[lv["MT Domain"] == mt].to_csv(f, index=False)
-
-    with folder.get_writer(f"{mt}_JR.csv") as f:
-        jr[jr["MT Domain"] == mt].to_csv(f, index=False)
-
-    with folder.get_writer(f"{mt}_Fieldglass.csv") as f:
-        fg[fg["MT Domain"] == mt].to_csv(f, index=False)
-
-    tr_filtered = tr[
+    tr_f = tr[
         (tr["MT Domain(To)"] == mt) |
         (tr["MT Domain (actual)"] == mt)
     ]
 
-    with folder.get_writer(f"{mt}_Transfers.csv") as f:
-        tr_filtered.to_csv(f, index=False)
+    # Write CSVs
+    write_csv(report_f, f"{mt}_Report.csv")
+    write_csv(hc_f, f"{mt}_HC_Data.csv")
+    write_csv(nj_f, f"{mt}_New_Joiners.csv")
+    write_csv(lv_f, f"{mt}_Leavers.csv")
+    write_csv(jr_f, f"{mt}_JR.csv")
+    write_csv(fg_f, f"{mt}_Fieldglass.csv")
+    write_csv(tr_f, f"{mt}_Transfers.csv")
 
-print("Done")
+print("Done — All MT files created")
