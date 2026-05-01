@@ -1,6 +1,5 @@
 import dataiku
 import pandas as pd
-import os
 
 # Load datasets
 report = dataiku.Dataset("report_clean").get_dataframe()
@@ -10,31 +9,34 @@ leavers = dataiku.Dataset("Leavers_Clean").get_dataframe()
 transfers = dataiku.Dataset("Transfers_Clean").get_dataframe()
 
 # Folder
-folder = dataiku.Folder("mt_domain_excels")
-base_path = folder.get_path()
+folder = dataiku.Folder("mt_domain_output")
 
+# MT list
 mt_list = report['MT Domain'].dropna().unique()
 
 for mt in mt_list:
 
     safe_mt = str(mt).replace(" ", "_").replace("/", "_")
 
-    # Filter each dataset
+    # Filter
     r = report[report['MT Domain'] == mt].copy()
     h = hc[hc['MT Domain'] == mt].copy()
     j = joiners[joiners['MT Domain'] == mt].copy()
     l = leavers[leavers['MT Domain'] == mt].copy()
     t = transfers[transfers['MT Domain'] == mt].copy()
 
-    # Add sheet indicator
-    r['Sheet'] = 'Report'
-    h['Sheet'] = 'HC_Data'
-    j['Sheet'] = 'Joiners'
-    l['Sheet'] = 'Leavers'
-    t['Sheet'] = 'Transfers'
+    # Tag source
+    r['Source'] = 'Report'
+    h['Source'] = 'HC_Data'
+    j['Source'] = 'Joiners'
+    l['Source'] = 'Leavers'
+    t['Source'] = 'Transfers'
 
-    # Combine all
+    # Combine
     final_df = pd.concat([r, h, j, l, t], ignore_index=True)
 
-    # Save single CSV per MT
-    final_df.to_csv(f"{base_path}/{safe_mt}.csv", index=False)
+    # Convert to CSV string
+    csv_bytes = final_df.to_csv(index=False).encode("utf-8")
+
+    # Write to managed folder (THIS is the key fix)
+    folder.upload_stream(f"{safe_mt}.csv", csv_bytes)
