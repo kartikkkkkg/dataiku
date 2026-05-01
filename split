@@ -8,35 +8,38 @@ joiners = dataiku.Dataset("New_Joiners_Clean").get_dataframe()
 leavers = dataiku.Dataset("Leavers_Clean").get_dataframe()
 transfers = dataiku.Dataset("Transfers_Clean").get_dataframe()
 
-# Folder
 folder = dataiku.Folder("mt_domain_output")
 
-# MT list
-mt_list = report['MT Domain'].dropna().unique()
+def normalize(series):
+    return series.astype(str).str.strip().str.upper()
 
-for mt in mt_list:
+# Get MT list
+mts = normalize(hc["MT Domain"]).dropna().unique()
+
+for mt in mts:
 
     safe_mt = str(mt).replace(" ", "_").replace("/", "_")
 
-    # Filter
-    r = report[report['MT Domain'] == mt].copy()
-    h = hc[hc['MT Domain'] == mt].copy()
-    j = joiners[joiners['MT Domain'] == mt].copy()
-    l = leavers[leavers['MT Domain'] == mt].copy()
-    t = transfers[transfers['MT Domain'] == mt].copy()
+    # Apply same filtering logic as your local code
+    r = report[normalize(report["MT Domain"]) == mt].copy()
+    h = hc[normalize(hc["MT Domain"]) == mt].copy()
+    j = joiners[normalize(joiners["MT Domain"]) == mt].copy()
+    l = leavers[normalize(leavers["MT Domain"]) == mt].copy()
 
-    # Tag source
-    r['Source'] = 'Report'
-    h['Source'] = 'HC_Data'
-    j['Source'] = 'Joiners'
-    l['Source'] = 'Leavers'
-    t['Source'] = 'Transfers'
+    cond1 = normalize(transfers["MT Domain(To)"]) == mt
+    cond2 = normalize(transfers["MT Domain (actual)"]) == mt
+    t = transfers[cond1 | cond2].copy()
 
-    # Combine
+    # Add sheet names (VERY IMPORTANT)
+    r["Sheet"] = "Report"
+    h["Sheet"] = "HC Data"
+    j["Sheet"] = "New Joiners"
+    l["Sheet"] = "Leavers"
+    t["Sheet"] = "Transfers"
+
     final_df = pd.concat([r, h, j, l, t], ignore_index=True)
 
-    # Convert to CSV string
-    csv_bytes = final_df.to_csv(index=False).encode("utf-8")
-
-    # Write to managed folder (THIS is the key fix)
-    folder.upload_stream(f"{safe_mt}.csv", csv_bytes)
+    folder.upload_stream(
+        f"{safe_mt}.csv",
+        final_df.to_csv(index=False).encode("utf-8")
+    )
