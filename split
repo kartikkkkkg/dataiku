@@ -12,32 +12,37 @@ jr = dataiku.Dataset("JR_Clean").get_dataframe()
 fg = dataiku.Dataset("Fieldglass_Clean").get_dataframe()
 tr = dataiku.Dataset("Transfers_Clean").get_dataframe()
 
-# MT list
 mts = hc["MT Domain"].dropna().unique()
 skip = ["OPS WRB", "OPS CIB", "FCSO"]
 mts = [m for m in mts if m not in skip]
 
 for mt in mts:
 
-    filename = f"{mt}.xlsx"
+    # Write each sheet as separate CSV
+    with folder.get_writer(f"{mt}_Report.csv") as f:
+        report[report["MT Domain"] == mt].to_csv(f, index=False)
 
-    # 👉 THIS IS THE FIX
-    with folder.get_writer(filename) as writer:
+    with folder.get_writer(f"{mt}_HC_Data.csv") as f:
+        hc[hc["MT Domain"] == mt].to_csv(f, index=False)
 
-        with pd.ExcelWriter(writer, engine='openpyxl') as excel_writer:
+    with folder.get_writer(f"{mt}_New_Joiners.csv") as f:
+        nj[nj["MT Domain"] == mt].to_csv(f, index=False)
 
-            report[report["MT Domain"] == mt].to_excel(excel_writer, "Report", index=False)
-            hc[hc["MT Domain"] == mt].to_excel(excel_writer, "HC_Data", index=False)
-            nj[nj["MT Domain"] == mt].to_excel(excel_writer, "New_Joiners", index=False)
-            lv[lv["MT Domain"] == mt].to_excel(excel_writer, "Leavers", index=False)
-            jr[jr["MT Domain"] == mt].to_excel(excel_writer, "JR", index=False)
-            fg[fg["MT Domain"] == mt].to_excel(excel_writer, "Fieldglass", index=False)
+    with folder.get_writer(f"{mt}_Leavers.csv") as f:
+        lv[lv["MT Domain"] == mt].to_csv(f, index=False)
 
-            tr_filtered = tr[
-                (tr["MT Domain(To)"] == mt) |
-                (tr["MT Domain (actual)"] == mt)
-            ]
+    with folder.get_writer(f"{mt}_JR.csv") as f:
+        jr[jr["MT Domain"] == mt].to_csv(f, index=False)
 
-            tr_filtered.to_excel(excel_writer, "Transfers", index=False)
+    with folder.get_writer(f"{mt}_Fieldglass.csv") as f:
+        fg[fg["MT Domain"] == mt].to_csv(f, index=False)
+
+    tr_filtered = tr[
+        (tr["MT Domain(To)"] == mt) |
+        (tr["MT Domain (actual)"] == mt)
+    ]
+
+    with folder.get_writer(f"{mt}_Transfers.csv") as f:
+        tr_filtered.to_csv(f, index=False)
 
 print("Done")
