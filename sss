@@ -1,0 +1,93 @@
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd
+import numpy as np
+from io import BytesIO
+from datetime import datetime
+import pytz
+
+# ================================
+# Managed folder
+# ================================
+output_folder = dataiku.Folder("")
+
+# ================================
+# Load datasets (NON-FILTERED)
+# ================================
+report_df = dataiku.Dataset("Report").get_dataframe()
+hc_df = dataiku.Dataset("TnO_Central_HC").get_dataframe()
+nj_df = dataiku.Dataset("Newjoiner").get_dataframe()
+lv_df = dataiku.Dataset("leavers").get_dataframe()
+jr_df = dataiku.Dataset("JR").get_dataframe()
+fg_df = dataiku.Dataset("FG").get_dataframe()
+tf_df = dataiku.Dataset("transfer").get_dataframe()
+
+# ================================
+# Get all MT Domains
+# ================================
+all_mt = set()
+
+for df in [report_df, hc_df, nj_df, lv_df, jr_df, fg_df]:
+    if "MT Domain" in df.columns:
+        all_mt.update(df["MT Domain"].dropna().unique())
+
+# Transfer has 2 columns
+if "MT Domain(To)" in tf_df.columns:
+    all_mt.update(tf_df["MT Domain(To)"].dropna().unique())
+
+if "MT Domain(Actual)" in tf_df.columns:
+    all_mt.update(tf_df["MT Domain(Actual)"].dropna().unique())
+
+# ================================
+# Loop each MT Domain
+# ================================
+for mt in all_mt:
+
+    # Filter each dataset
+    report_f = report_df[report_df["MT Domain"] == mt] if "MT Domain" in report_df.columns else pd.DataFrame()
+    hc_f = hc_df[hc_df["MT Domain"] == mt] if "MT Domain" in hc_df.columns else pd.DataFrame()
+    nj_f = nj_df[nj_df["MT Domain"] == mt] if "MT Domain" in nj_df.columns else pd.DataFrame()
+    lv_f = lv_df[lv_df["MT Domain"] == mt] if "MT Domain" in lv_df.columns else pd.DataFrame()
+    jr_f = jr_df[jr_df["MT Domain"] == mt] if "MT Domain" in jr_df.columns else pd.DataFrame()
+    fg_f = fg_df[fg_df["MT Domain"] == mt] if "MT Domain" in fg_df.columns else pd.DataFrame()
+
+    # Transfer logic (important)
+    if "MT Domain(To)" in tf_df.columns and "MT Domain(Actual)" in tf_df.columns:
+        tf_f = tf_df[
+            (tf_df["MT Domain(To)"] == mt) |
+            (tf_df["MT Domain(Actual)"] == mt)
+        ]
+    else:
+        tf_f = pd.DataFrame()
+
+    # ================================
+    # Create Excel file in memory
+    # ================================
+    stream = BytesIO()
+
+    with pd.ExcelWriter(stream, engine="openpyxl") as writer:
+
+        report_f.to_excel(writer, index=False, sheet_name="Report")
+        hc_f.to_excel(writer, index=False, sheet_name="1_HC_Data")
+        nj_f.to_excel(writer, index=False, sheet_name="2_NewJoiner")
+        lv_f.to_excel(writer, index=False, sheet_name="3_Leavers")
+        jr_f.to_excel(writer, index=False, sheet_name="4_JR")
+        fg_f.to_excel(writer, index=False, sheet_name="5_FG")
+        tf_f.to_excel(writer, index=False, sheet_name="6_Transfer")
+
+    stream.seek(0)
+
+    # ================================
+    # Clean file name
+    # ================================
+    safe_mt = str(mt).replace("/", "_").replace(" ", "_")
+
+    file_name = f"{safe_mt}_Ops_CIB_Report.xlsx"
+
+    # ================================
+    # Write to managed folder
+    # ================================
+    with output_folder.get_writer(file_name) as writer:
+        writer.write(stream.read())
+
+print("✅ Files generated successfully")
