@@ -1,0 +1,47 @@
+import dataiku
+import pandas as pd
+import os
+
+# Folder
+folder = dataiku.Folder("central_report")
+folder_path = folder.get_path()
+
+# Read datasets
+report = dataiku.Dataset("report_clean").get_dataframe()
+hc = dataiku.Dataset("HC_Data_Clean").get_dataframe()
+nj = dataiku.Dataset("New_Joiners_Clean").get_dataframe()
+lv = dataiku.Dataset("Leavers_Clean").get_dataframe()
+jr = dataiku.Dataset("JR_Clean").get_dataframe()
+fg = dataiku.Dataset("Fieldglass_Clean").get_dataframe()
+tr = dataiku.Dataset("Transfers_Clean").get_dataframe()
+
+# Get MT Domains
+mts = hc["MT Domain"].dropna().unique()
+
+# Remove unwanted
+skip = ["OPS WRB", "OPS CIB", "FCSO"]
+mts = [m for m in mts if m not in skip]
+
+# Loop for each MT
+for mt in mts:
+
+    output_file = os.path.join(folder_path, f"{mt}.xlsx")
+
+    with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+
+        report[report["MT Domain"] == mt].to_excel(writer, "Report", index=False)
+        hc[hc["MT Domain"] == mt].to_excel(writer, "HC_Data", index=False)
+        nj[nj["MT Domain"] == mt].to_excel(writer, "New_Joiners", index=False)
+        lv[lv["MT Domain"] == mt].to_excel(writer, "Leavers", index=False)
+        jr[jr["MT Domain"] == mt].to_excel(writer, "JR", index=False)
+        fg[fg["MT Domain"] == mt].to_excel(writer, "Fieldglass", index=False)
+
+        # Transfers logic
+        tr_filtered = tr[
+            (tr["MT Domain(To)"] == mt) |
+            (tr["MT Domain (actual)"] == mt)
+        ]
+
+        tr_filtered.to_excel(writer, "Transfers", index=False)
+
+print("Done — files created")
