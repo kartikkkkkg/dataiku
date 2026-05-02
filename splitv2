@@ -3,7 +3,7 @@ import dataiku
 import pandas as pd
 from io import BytesIO
 from datetime import datetime, timedelta
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill, Alignment
 
 # ================================
 # Managed folder
@@ -27,14 +27,7 @@ tf_df     = dataiku.Dataset("transfer_clean").get_dataframe()
 def normalize(df, cols):
     for col in cols:
         if col in df.columns:
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                .str.replace("-", " ")
-                .str.replace("_", " ")
-            )
+            df[col] = df[col].astype(str).str.strip().str.upper()
     return df
 
 report_df = normalize(report_df, ["MT Domain"])
@@ -44,27 +37,34 @@ lv_df     = normalize(lv_df, ["MT Domain"])
 jr_df     = normalize(jr_df, ["MT Domain"])
 fg_df     = normalize(fg_df, ["MT Domain"])
 
-# FIX column names first
 tf_df.columns = tf_df.columns.str.strip()
-
 tf_df = normalize(tf_df, ["MT Domain(To)", "MT Domain (actual)"])
 
 # ================================
-# MT list from HC
+# Skip MT
 # ================================
-all_mt = hc_df["MT Domain"].dropna().unique()
+SKIP_MT = {"OPS WRB", "OPS CIB", "FCSO"}
+all_mt = [mt for mt in hc_df["MT Domain"].dropna().unique() if mt not in SKIP_MT]
 
 # ================================
-# Last month-end date
+# Last month-end
 # ================================
 today = datetime.today()
-first_day = today.replace(day=1)
-last_month_end = first_day - timedelta(days=1)
-
-date_str = last_month_end.strftime("%d%b%y")  # 31Mar26
+last_month_end = today.replace(day=1) - timedelta(days=1)
+date_str = last_month_end.strftime("%d%b%y")
 
 # ================================
-# Loop each MT
+# Styles
+# ================================
+HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+HEADER_FONT = Font(color="FFFFFF", bold=True)
+CENTER_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+TOTAL_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
+TOTAL_FONT = Font(bold=True)
+
+# ================================
+# Loop
 # ================================
 for mt in all_mt:
 
@@ -75,18 +75,14 @@ for mt in all_mt:
     jr_f     = jr_df[jr_df["MT Domain"] == mt]
     fg_f     = fg_df[fg_df["MT Domain"] == mt]
 
-    # Transfer
     if "MT Domain(To)" in tf_df.columns and "MT Domain (actual)" in tf_df.columns:
         tf_f = tf_df[
             (tf_df["MT Domain(To)"] == mt) |
             (tf_df["MT Domain (actual)"] == mt)
         ]
     else:
-        tf_f = tf_df.iloc[0:0]  # keep headers
+        tf_f = tf_df.iloc[0:0]
 
-    # ================================
-    # Excel
-    # ================================
     stream = BytesIO()
 
     with pd.ExcelWriter(stream, engine="openpyxl") as writer:
@@ -99,42 +95,67 @@ for mt in all_mt:
         fg_f.to_excel(writer, index=False, sheet_name="5_FG")
         tf_f.to_excel(writer, index=False, sheet_name="6_Transfer")
 
-        # ================================
-        # FORMATTING
-        # ================================
-        for sheet in writer.sheets.values():
+        for name, sheet in writer.sheets.items():
 
-            # Freeze header
+            # Freeze
             sheet.freeze_panes = "A2"
 
-            # Bold header
+            # HEADER STYLE
             for cell in sheet[1]:
-                cell.font = Font(bold=True)
+                if cell.value:
+                    cell.fill = HEADER_FILL
+                    cell.font = HEADER_FONT
+                    cell.alignment = CENTER_ALIGN
 
-            # Auto column width
-            for column_cells in sheet.columns:
-                max_length = 0
-                col_letter = column_cells[0].column_letter
+            # REPORT SPECIAL LOGIC
+            if name == "Report":
 
-                for cell in column_cells:
+                # wrap headers
+                for cell in sheet[1]:
+                    cell.alignment = CENTER_ALIGN
+
+                # FIX unnamed columns
+                for cell in sheet[1]:
+                    if isinstance(cell.value, str) and "Unnamed" in cell.value:
+                        cell.value = ""
+
+                # TOTAL ROW
+                last_row = sheet.max_row
+                total_row = last_row + 1
+                sheet.cell(total_row, 1, "TOTAL")
+
+                for col in range(2, sheet.max_column + 1):
+                    s = 0
+                    for r in range(2, last_row + 1):
+                        val = sheet.cell(r, col).value
+                        if isinstance(val, (int, float)):
+                            s += val
+                    sheet.cell(total_row, col, s)
+
+                # TOTAL styling
+                for col in range(1, sheet.max_column + 1):
+                    cell = sheet.cell(total_row, col)
+                    cell.fill = TOTAL_FILL
+                    cell.font = TOTAL_FONT
+                    cell.alignment = CENTER_ALIGN
+
+            # COLUMN WIDTH
+            for col_cells in sheet.columns:
+                max_len = 0
+                col_letter = col_cells[0].column_letter
+
+                for cell in col_cells:
                     if cell.value:
-                        max_length = max(max_length, len(str(cell.value)))
+                        max_len = max(max_len, len(str(cell.value)))
 
-                sheet.column_dimensions[col_letter].width = min(max_length + 2, 30)
+                sheet.column_dimensions[col_letter].width = min(max_len + 1, 25)
 
     stream.seek(0)
 
-    # ================================
-    # File name
-    # ================================
     safe_mt = str(mt).replace("/", "_").replace(" ", "_")
-
     file_name = f"T&O_HC_{date_str}_{safe_mt}.xlsx"
 
-    # ================================
-    # Write
-    # ================================
     with output_folder.get_writer(file_name) as writer:
         writer.write(stream.read())
 
-print("✅ Files generated successfully")
+print("✅ FINAL VERSION READY")
