@@ -38,34 +38,33 @@ fg_df     = normalize(fg_df, ["MT Domain"])
 tf_df     = normalize(tf_df, ["MT Domain(To)", "MT Domain(Actual)"])
 
 # ================================
-# Get all MT Domains
+# OPTIONAL: remove junk MT values
 # ================================
-all_mt = set()
+SKIP_MT = {"OPS WRB", "OPS CIB", "FCSO"}
 
-for df in [report_df, hc_df, nj_df, lv_df, jr_df, fg_df]:
-    if "MT Domain" in df.columns:
-        all_mt.update(df["MT Domain"].dropna().unique())
+# ================================
+# ✅ FIX: MT source ONLY from HC
+# ================================
+if "MT Domain" not in hc_df.columns:
+    raise Exception("HC dataset missing MT Domain column")
 
-if "MT Domain(To)" in tf_df.columns:
-    all_mt.update(tf_df["MT Domain(To)"].dropna().unique())
-
-if "MT Domain(Actual)" in tf_df.columns:
-    all_mt.update(tf_df["MT Domain(Actual)"].dropna().unique())
+all_mt = hc_df["MT Domain"].dropna().unique()
+all_mt = [mt for mt in all_mt if mt not in SKIP_MT]
 
 # ================================
 # Loop each MT Domain
 # ================================
 for mt in all_mt:
 
-    # Filter datasets
+    # ---------- Filter datasets ----------
     report_f = report_df[report_df["MT Domain"] == mt] if "MT Domain" in report_df.columns else pd.DataFrame()
-    hc_f     = hc_df[hc_df["MT Domain"] == mt] if "MT Domain" in hc_df.columns else pd.DataFrame()
+    hc_f     = hc_df[hc_df["MT Domain"] == mt]
     nj_f     = nj_df[nj_df["MT Domain"] == mt] if "MT Domain" in nj_df.columns else pd.DataFrame()
     lv_f     = lv_df[lv_df["MT Domain"] == mt] if "MT Domain" in lv_df.columns else pd.DataFrame()
     jr_f     = jr_df[jr_df["MT Domain"] == mt] if "MT Domain" in jr_df.columns else pd.DataFrame()
     fg_f     = fg_df[fg_df["MT Domain"] == mt] if "MT Domain" in fg_df.columns else pd.DataFrame()
 
-    # Transfer logic (fixed)
+    # ---------- Transfer logic (FIXED + SAFE) ----------
     if "MT Domain(To)" in tf_df.columns and "MT Domain(Actual)" in tf_df.columns:
         tf_f = tf_df[
             (tf_df["MT Domain(To)"] == mt) |
