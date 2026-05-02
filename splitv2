@@ -41,6 +41,16 @@ tf_df.columns = tf_df.columns.str.strip()
 tf_df = normalize(tf_df, ["MT Domain(To)", "MT Domain (actual)"])
 
 # ================================
+# Clean column names (REMOVE col_*)
+# ================================
+def clean_columns(df):
+    df.columns = [
+        "" if str(col).startswith("col_") or str(col).startswith("Unnamed") else col
+        for col in df.columns
+    ]
+    return df
+
+# ================================
 # Skip MT
 # ================================
 SKIP_MT = {"OPS WRB", "OPS CIB", "FCSO"}
@@ -75,6 +85,7 @@ for mt in all_mt:
     jr_f     = jr_df[jr_df["MT Domain"] == mt]
     fg_f     = fg_df[fg_df["MT Domain"] == mt]
 
+    # Transfer logic
     if "MT Domain(To)" in tf_df.columns and "MT Domain (actual)" in tf_df.columns:
         tf_f = tf_df[
             (tf_df["MT Domain(To)"] == mt) |
@@ -83,6 +94,18 @@ for mt in all_mt:
     else:
         tf_f = tf_df.iloc[0:0]
 
+    # Clean headers
+    report_f = clean_columns(report_f)
+    hc_f     = clean_columns(hc_f)
+    nj_f     = clean_columns(nj_f)
+    lv_f     = clean_columns(lv_f)
+    jr_f     = clean_columns(jr_f)
+    fg_f     = clean_columns(fg_f)
+    tf_f     = clean_columns(tf_f)
+
+    # ================================
+    # Excel
+    # ================================
     stream = BytesIO()
 
     with pd.ExcelWriter(stream, engine="openpyxl") as writer:
@@ -97,40 +120,52 @@ for mt in all_mt:
 
         for name, sheet in writer.sheets.items():
 
-            # Freeze
             sheet.freeze_panes = "A2"
 
             # HEADER STYLE
             for cell in sheet[1]:
-                if cell.value:
+                if cell.value not in [None, ""]:
                     cell.fill = HEADER_FILL
                     cell.font = HEADER_FONT
                     cell.alignment = CENTER_ALIGN
 
+            # ================================
             # REPORT SPECIAL LOGIC
+            # ================================
             if name == "Report":
 
-                # wrap headers
-                for cell in sheet[1]:
-                    cell.alignment = CENTER_ALIGN
-
-                # FIX unnamed columns
+                # Remove any leftover Unnamed headers
                 for cell in sheet[1]:
                     if isinstance(cell.value, str) and "Unnamed" in cell.value:
                         cell.value = ""
 
-                # TOTAL ROW
+                # TOTAL ROW (STRICT NUMERIC ONLY)
                 last_row = sheet.max_row
                 total_row = last_row + 1
+
                 sheet.cell(total_row, 1, "TOTAL")
 
                 for col in range(2, sheet.max_column + 1):
-                    s = 0
+
+                    values = []
+                    has_non_numeric = False
+
                     for r in range(2, last_row + 1):
                         val = sheet.cell(r, col).value
-                        if isinstance(val, (int, float)):
-                            s += val
-                    sheet.cell(total_row, col, s)
+
+                        if val is None or val == "":
+                            continue
+
+                        try:
+                            values.append(float(val))
+                        except:
+                            has_non_numeric = True
+
+                    # ❗ Skip if ANY string present OR no numeric
+                    if has_non_numeric or len(values) == 0:
+                        continue
+
+                    sheet.cell(total_row, col, sum(values))
 
                 # TOTAL styling
                 for col in range(1, sheet.max_column + 1):
@@ -139,7 +174,9 @@ for mt in all_mt:
                     cell.font = TOTAL_FONT
                     cell.alignment = CENTER_ALIGN
 
-            # COLUMN WIDTH
+            # ================================
+            # Column width
+            # ================================
             for col_cells in sheet.columns:
                 max_len = 0
                 col_letter = col_cells[0].column_letter
@@ -158,4 +195,4 @@ for mt in all_mt:
     with output_folder.get_writer(file_name) as writer:
         writer.write(stream.read())
 
-print("✅ FINAL VERSION READY")
+print("✅ FINAL CLEAN VERSION READY")
