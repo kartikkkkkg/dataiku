@@ -1,89 +1,106 @@
+# -*- coding: utf-8 -*-
 import dataiku
 import pandas as pd
+import numpy as np
 from io import BytesIO
 
-# -------------------------------
-# Helpers
-# -------------------------------
-def normalize(series):
-    return series.astype(str).str.strip().str.upper()
+# ================================
+# Managed folder
+# ================================
+output_folder = dataiku.Folder("yvmNqbID")
 
-def clean_cols(df):
-    df.columns = df.columns.str.strip()
+# ================================
+# Load datasets (CLEANED)
+# ================================
+report_df = dataiku.Dataset("Report_clean").get_dataframe()
+hc_df     = dataiku.Dataset("TnO_Central_HC_clean").get_dataframe()
+nj_df     = dataiku.Dataset("Newjoiner_clean").get_dataframe()
+lv_df     = dataiku.Dataset("leavers_clean").get_dataframe()
+jr_df     = dataiku.Dataset("JR_clean").get_dataframe()
+fg_df     = dataiku.Dataset("FG_clean").get_dataframe()
+tf_df     = dataiku.Dataset("transfer_clean").get_dataframe()
+
+# ================================
+# Normalize MT Domain columns
+# ================================
+def normalize(df, cols):
+    for col in cols:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip().str.upper()
     return df
 
-def filter_single(df, mt):
+report_df = normalize(report_df, ["MT Domain"])
+hc_df     = normalize(hc_df, ["MT Domain"])
+nj_df     = normalize(nj_df, ["MT Domain"])
+lv_df     = normalize(lv_df, ["MT Domain"])
+jr_df     = normalize(jr_df, ["MT Domain"])
+fg_df     = normalize(fg_df, ["MT Domain"])
+tf_df     = normalize(tf_df, ["MT Domain(To)", "MT Domain(Actual)"])
+
+# ================================
+# Get all MT Domains
+# ================================
+all_mt = set()
+
+for df in [report_df, hc_df, nj_df, lv_df, jr_df, fg_df]:
     if "MT Domain" in df.columns:
-        return df[normalize(df["MT Domain"]) == mt]
-    return pd.DataFrame()
+        all_mt.update(df["MT Domain"].dropna().unique())
 
-def filter_transfer(df, mt):
-    cond1 = False
-    cond2 = False
+if "MT Domain(To)" in tf_df.columns:
+    all_mt.update(tf_df["MT Domain(To)"].dropna().unique())
 
-    if "MT Domain(To)" in df.columns:
-        cond1 = normalize(df["MT Domain(To)"]) == mt
+if "MT Domain(Actual)" in tf_df.columns:
+    all_mt.update(tf_df["MT Domain(Actual)"].dropna().unique())
 
-    if "MT Domain (actual)" in df.columns:
-        cond2 = normalize(df["MT Domain (actual)"]) == mt
+# ================================
+# Loop each MT Domain
+# ================================
+for mt in all_mt:
 
-    return df[cond1 | cond2]
+    # Filter datasets
+    report_f = report_df[report_df["MT Domain"] == mt] if "MT Domain" in report_df.columns else pd.DataFrame()
+    hc_f     = hc_df[hc_df["MT Domain"] == mt] if "MT Domain" in hc_df.columns else pd.DataFrame()
+    nj_f     = nj_df[nj_df["MT Domain"] == mt] if "MT Domain" in nj_df.columns else pd.DataFrame()
+    lv_f     = lv_df[lv_df["MT Domain"] == mt] if "MT Domain" in lv_df.columns else pd.DataFrame()
+    jr_f     = jr_df[jr_df["MT Domain"] == mt] if "MT Domain" in jr_df.columns else pd.DataFrame()
+    fg_f     = fg_df[fg_df["MT Domain"] == mt] if "MT Domain" in fg_df.columns else pd.DataFrame()
 
-# -------------------------------
-# Load datasets
-# -------------------------------
-report = clean_cols(dataiku.Dataset("report_clean").get_dataframe())
-hc_data = clean_cols(dataiku.Dataset("HC_Data_Clean").get_dataframe())
-nj_data = clean_cols(dataiku.Dataset("New_Joiners_Clean").get_dataframe())
-lv_data = clean_cols(dataiku.Dataset("Leavers_Clean").get_dataframe())
-jr_data = clean_cols(dataiku.Dataset("JR_Clean").get_dataframe())
-fg_data = clean_cols(dataiku.Dataset("Fieldglass_Clean").get_dataframe())
-tf_data = clean_cols(dataiku.Dataset("Transfers_Clean").get_dataframe())
+    # Transfer logic (fixed)
+    if "MT Domain(To)" in tf_df.columns and "MT Domain(Actual)" in tf_df.columns:
+        tf_f = tf_df[
+            (tf_df["MT Domain(To)"] == mt) |
+            (tf_df["MT Domain(Actual)"] == mt)
+        ]
+    else:
+        tf_f = pd.DataFrame()
 
-# -------------------------------
-# Managed folder
-# -------------------------------
-folder = dataiku.Folder("mt_domain_output")
-
-# -------------------------------
-# Get MT domains (safe)
-# -------------------------------
-if "MT Domain" not in report.columns:
-    raise Exception("MT Domain column not found in report_clean")
-
-mt_list = normalize(report["MT Domain"]).dropna().unique()
-
-# -------------------------------
-# Loop per MT
-# -------------------------------
-for mt in mt_list:
-
-    # Apply filters
-    df  = filter_single(report, mt)
-    df1 = filter_single(hc_data, mt)
-    df2 = filter_single(nj_data, mt)
-    df3 = filter_single(lv_data, mt)
-    df4 = filter_single(jr_data, mt)
-    df5 = filter_single(fg_data, mt)
-    df6 = filter_transfer(tf_data, mt)  # ✅ FIXED LOGIC
-
-    # Clean filename
-    safe_mt = str(mt).replace("/", "_").replace(" ", "_")
-
+    # ================================
     # Create Excel in memory
+    # ================================
     stream = BytesIO()
 
     with pd.ExcelWriter(stream, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Report")
-        df1.to_excel(writer, index=False, sheet_name="HC Data")
-        df2.to_excel(writer, index=False, sheet_name="New Joiners")
-        df3.to_excel(writer, index=False, sheet_name="Leavers")
-        df4.to_excel(writer, index=False, sheet_name="JR")
-        df5.to_excel(writer, index=False, sheet_name="Fieldglass")
-        df6.to_excel(writer, index=False, sheet_name="Transfers")
+
+        report_f.to_excel(writer, index=False, sheet_name="Report")
+        hc_f.to_excel(writer, index=False, sheet_name="1_HC_Data")
+        nj_f.to_excel(writer, index=False, sheet_name="2_NewJoiner")
+        lv_f.to_excel(writer, index=False, sheet_name="3_Leavers")
+        jr_f.to_excel(writer, index=False, sheet_name="4_JR")
+        fg_f.to_excel(writer, index=False, sheet_name="5_FG")
+        tf_f.to_excel(writer, index=False, sheet_name="6_Transfer")
 
     stream.seek(0)
 
-    # Save file
-    with folder.get_writer(f"{safe_mt}.xlsx") as f:
-        f.write(stream.read())
+    # ================================
+    # Safe file name
+    # ================================
+    safe_mt = str(mt).replace("/", "_").replace(" ", "_")
+    file_name = f"TO_{safe_mt}.xlsx"
+
+    # ================================
+    # Write to folder
+    # ================================
+    with output_folder.get_writer(file_name) as writer:
+        writer.write(stream.read())
+
+print("✅ Files generated successfully")
