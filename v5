@@ -14,7 +14,10 @@ MERGE_MT = {
     "GCIO": ["GCIO-WEB", "GCIO-CIB"]
 }
 
-SKIP_MT = {"OPS WRB", "OPS CIB", "FCSO"}
+# ================================
+# Managed folder
+# ================================
+output_folder = dataiku.Folder("yvmNqbID")
 
 # ================================
 # Load datasets (KEEP #NA)
@@ -22,13 +25,13 @@ SKIP_MT = {"OPS WRB", "OPS CIB", "FCSO"}
 def load_dataset(name):
     return dataiku.Dataset(name).get_dataframe(na_values=[], keep_default_na=False)
 
-report_df = load_dataset("Report")
-hc_df     = load_dataset("TnO_Central_HC")
-nj_df     = load_dataset("Newjoiner")
-lv_df     = load_dataset("leavers")
-jr_df     = load_dataset("JR")
-fg_df     = load_dataset("FG")
-tf_df     = load_dataset("transfer")
+report_df = load_dataset("Report_clean")
+hc_df     = load_dataset("TnO_Central_HC_clean")
+nj_df     = load_dataset("Newjoiner_clean")
+lv_df     = load_dataset("leavers_clean")
+jr_df     = load_dataset("JR_clean")
+fg_df     = load_dataset("FG_clean")
+tf_df     = load_dataset("transfer_clean")
 
 # ================================
 # Normalize
@@ -60,10 +63,14 @@ def clean_columns(df):
     return df
 
 # ================================
-# MT GROUPING
+# Skip MT
 # ================================
+SKIP_MT = {"OPS WRB", "OPS CIB", "FCSO"}
 raw_mts = [mt for mt in hc_df["MT Domain"].dropna().unique() if mt not in SKIP_MT]
 
+# ================================
+# MT GROUPING
+# ================================
 mt_groups = {}
 
 if ENABLE_MT_MERGE:
@@ -78,7 +85,7 @@ else:
         mt_groups[mt] = [mt]
 
 # ================================
-# Date
+# Last month-end
 # ================================
 today = datetime.today()
 last_month_end = today.replace(day=1) - timedelta(days=1)
@@ -95,20 +102,21 @@ TOTAL_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="so
 TOTAL_FONT = Font(bold=True)
 
 # ================================
-# LOOP
+# Loop
 # ================================
 for mt_name, mt_list in mt_groups.items():
 
     def filter_df(df):
         return df[df["MT Domain"].isin(mt_list)] if "MT Domain" in df.columns else pd.DataFrame()
 
-    report_f = clean_columns(filter_df(report_df))
-    hc_f     = clean_columns(filter_df(hc_df))
-    nj_f     = clean_columns(filter_df(nj_df))
-    lv_f     = clean_columns(filter_df(lv_df))
-    jr_f     = clean_columns(filter_df(jr_df))
-    fg_f     = clean_columns(filter_df(fg_df))
+    report_f = filter_df(report_df)
+    hc_f     = filter_df(hc_df)
+    nj_f     = filter_df(nj_df)
+    lv_f     = filter_df(lv_df)
+    jr_f     = filter_df(jr_df)
+    fg_f     = filter_df(fg_df)
 
+    # Transfer
     if "MT Domain(To)" in tf_df.columns and "MT Domain (actual)" in tf_df.columns:
         tf_f = tf_df[
             (tf_df["MT Domain(To)"].isin(mt_list)) |
@@ -117,7 +125,14 @@ for mt_name, mt_list in mt_groups.items():
     else:
         tf_f = tf_df.iloc[0:0]
 
-    tf_f = clean_columns(tf_f)
+    # Clean headers
+    report_f = clean_columns(report_f)
+    hc_f     = clean_columns(hc_f)
+    nj_f     = clean_columns(nj_f)
+    lv_f     = clean_columns(lv_f)
+    jr_f     = clean_columns(jr_f)
+    fg_f     = clean_columns(fg_f)
+    tf_f     = clean_columns(tf_f)
 
     # ================================
     # Excel
@@ -145,7 +160,7 @@ for mt_name, mt_list in mt_groups.items():
                     cell.alignment = CENTER_ALIGN
 
             # ================================
-            # REPORT SHEET LOGIC
+            # REPORT LOGIC
             # ================================
             if name == "Report":
 
@@ -153,7 +168,7 @@ for mt_name, mt_list in mt_groups.items():
                 total_row = last_row + 1
                 sheet.cell(total_row, 1, "TOTAL")
 
-                # ROUND + FORMAT ALL NUMERIC CELLS
+                # 🔥 ROUND + FORMAT ALL NUMBERS
                 for r in range(2, last_row + 1):
                     for c in range(2, sheet.max_column + 1):
                         cell = sheet.cell(r, c)
@@ -189,7 +204,7 @@ for mt_name, mt_list in mt_groups.items():
                     total_cell = sheet.cell(total_row, col, round(sum(values)))
                     total_cell.number_format = '#,##0'
 
-                # Style total row
+                # TOTAL styling
                 for col in range(1, sheet.max_column + 1):
                     cell = sheet.cell(total_row, col)
                     cell.fill = TOTAL_FILL
