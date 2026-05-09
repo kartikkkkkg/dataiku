@@ -101,12 +101,20 @@ if "MT Domain" not in hc_df.columns:
         f"Columns found: {list(hc_df.columns)}"
     )
 
+
 # =====================================================
-# BUILD MT GROUPS
+# BUILD MT LIST FROM REPORT SHEET
 # =====================================================
+if "MT Domain" not in report_df.columns:
+
+    raise Exception(
+        f"MT Domain column missing in Report! "
+        f"Columns found: {list(report_df.columns)}"
+    )
+
 raw_mts = [
     mt
-    for mt in hc_df["MT Domain"].dropna().unique()
+    for mt in report_df["MT Domain"].dropna().unique()
     if mt not in SKIP_MT
 ]
 
