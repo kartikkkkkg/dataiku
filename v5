@@ -1,3 +1,4 @@
+```python
 # -*- coding: utf-8 -*-
 
 import dataiku
@@ -30,7 +31,7 @@ SKIP_MT = {x.strip().upper() for x in SKIP_MT}
 # OUTPUT FOLDER
 # =====================================================
 
-output_folder = dataiku.Folder("yvmNqblD")
+output_folder = dataiku.Folder("yvmNqbID")
 
 # =====================================================
 # LOAD DATASETS
@@ -68,15 +69,64 @@ for df in [
     df.columns = df.columns.str.strip()
 
 # =====================================================
-# NORMALIZE
+# CHECK REQUIRED COLUMNS
 # =====================================================
 
-def normalize(series):
+required_cols = {
+    "Report": ["MT Domain"],
+    "TnO_Central_HC": ["MT Domain"],
+    "Newjoiner": ["MT Domain"],
+    "leavers": ["MT Domain"],
+    "JR": ["MT Domain"],
+    "FG": ["MT Domain"],
+    "transfer": ["MT Domain(To)", "MT Domain (actual)"]
+}
 
-    return series.astype(str).str.strip().str.upper()
+dataset_map = {
+    "Report": report_df,
+    "TnO_Central_HC": hc_df,
+    "Newjoiner": nj_df,
+    "leavers": lv_df,
+    "JR": jr_df,
+    "FG": fg_df,
+    "transfer": tf_df
+}
+
+for ds_name, cols in required_cols.items():
+
+    df = dataset_map[ds_name]
+
+    for col in cols:
+
+        if col not in df.columns:
+
+            raise Exception(
+                f"{col} missing in {ds_name}. "
+                f"Columns found: {list(df.columns)}"
+            )
 
 # =====================================================
-# STYLING
+# CREATE NORMALIZED MT HELPER COLUMNS
+# =====================================================
+
+report_df["_MT_"] = report_df["MT Domain"].astype(str).str.strip().str.upper()
+
+hc_df["_MT_"] = hc_df["MT Domain"].astype(str).str.strip().str.upper()
+
+nj_df["_MT_"] = nj_df["MT Domain"].astype(str).str.strip().str.upper()
+
+lv_df["_MT_"] = lv_df["MT Domain"].astype(str).str.strip().str.upper()
+
+jr_df["_MT_"] = jr_df["MT Domain"].astype(str).str.strip().str.upper()
+
+fg_df["_MT_"] = fg_df["MT Domain"].astype(str).str.strip().str.upper()
+
+tf_df["_MT_TO_"] = tf_df["MT Domain(To)"].astype(str).str.strip().str.upper()
+
+tf_df["_MT_ACTUAL_"] = tf_df["MT Domain (actual)"].astype(str).str.strip().str.upper()
+
+# =====================================================
+# STYLES
 # =====================================================
 
 HEADER_FILL = PatternFill(
@@ -130,32 +180,11 @@ def style_total_row(ws):
         cell.font = TOTAL_FONT
         cell.alignment = CENTER_ALIGN
 
-def wrap_report_headers(ws):
-
-    for cell in ws[1]:
-
-        if cell.value:
-
-            cell.alignment = Alignment(
-                wrap_text=True,
-                vertical="center",
-                horizontal="center"
-            )
-
 # =====================================================
 # BUILD MT LIST FROM REPORT
 # =====================================================
 
-if "MT Domain" not in report_df.columns:
-
-    raise Exception(
-        f"MT Domain column missing in Report! "
-        f"Columns found: {list(report_df.columns)}"
-    )
-
-raw_mts = normalize(
-    report_df["MT Domain"]
-).dropna().unique()
+raw_mts = report_df["_MT_"].dropna().unique()
 
 raw_mts = [
     mt
@@ -218,11 +247,11 @@ for mt_name, mt_list in mt_groups.items():
 
     def filter_df(df):
 
-        if "MT Domain" not in df.columns:
+        if "_MT_" not in df.columns:
             return pd.DataFrame()
 
         return df[
-            normalize(df["MT Domain"]).isin(mt_list)
+            df["_MT_"].isin(mt_list)
         ].copy()
 
     # -------------------------------------------------
@@ -240,27 +269,39 @@ for mt_name, mt_list in mt_groups.items():
     # TRANSFER FILTER
     # -------------------------------------------------
 
-    if (
-        "MT Domain(To)" in tf_df.columns
-        and
-        "MT Domain (actual)" in tf_df.columns
-    ):
+    cond1 = tf_df["_MT_TO_"].isin(mt_list)
 
-        cond1 = normalize(
-            tf_df["MT Domain(To)"]
-        ).isin(mt_list)
+    cond2 = tf_df["_MT_ACTUAL_"].isin(mt_list)
 
-        cond2 = normalize(
-            tf_df["MT Domain (actual)"]
-        ).isin(mt_list)
+    tf_f = tf_df[
+        cond1 | cond2
+    ].copy()
 
-        tf_f = tf_df[
-            cond1 | cond2
-        ].copy()
+    # =================================================
+    # REMOVE HELPER COLUMNS
+    # =================================================
 
-    else:
+    for df in [
+        report_f,
+        hc_f,
+        nj_f,
+        lv_f,
+        jr_f,
+        fg_f,
+        tf_f
+    ]:
 
-        tf_f = pd.DataFrame()
+        drop_cols = [
+            col
+            for col in df.columns
+            if col.startswith("_MT")
+        ]
+
+        df.drop(
+            columns=drop_cols,
+            inplace=True,
+            errors="ignore"
+        )
 
     # =================================================
     # CLEAN HEADERS
@@ -349,40 +390,20 @@ for mt_name, mt_list in mt_groups.items():
 
         ws.freeze_panes = "A2"
 
-        # =============================================
-        # REPORT SHEET
-        # =============================================
+        # =================================================
+        # REPORT SHEET LOGIC
+        # =================================================
 
         if ws.title == "Report":
-
-            wrap_report_headers(ws)
-
-            # -----------------------------------------
-            # FIX HEADERS
-            # -----------------------------------------
-
-            for cell in ws[1]:
-
-                if (
-                    isinstance(cell.value, str)
-                    and
-                    (
-                        cell.value.startswith("Unnamed")
-                        or
-                        cell.value.startswith("col_")
-                    )
-                ):
-
-                    cell.value = ""
 
             last_row = ws.max_row
             total_row = last_row + 1
 
             ws.cell(total_row, 1, "TOTAL")
 
-            # -----------------------------------------
-            # ROUND + FORMAT
-            # -----------------------------------------
+            # ---------------------------------------------
+            # ROUND + FORMAT VALUES
+            # ---------------------------------------------
 
             for r in range(2, last_row + 1):
 
@@ -408,9 +429,9 @@ for mt_name, mt_list in mt_groups.items():
 
                             pass
 
-            # -----------------------------------------
+            # ---------------------------------------------
             # TOTAL ROW
-            # -----------------------------------------
+            # ---------------------------------------------
 
             for col in range(2, ws.max_column + 1):
 
@@ -454,17 +475,21 @@ for mt_name, mt_list in mt_groups.items():
 
                 total_cell.alignment = CENTER_ALIGN
 
+            # ---------------------------------------------
+            # TOTAL STYLE
+            # ---------------------------------------------
+
             style_total_row(ws)
 
-        # =============================================
+        # =================================================
         # STYLE HEADERS
-        # =============================================
+        # =================================================
 
         style_headers(ws)
 
-        # =============================================
+        # =================================================
         # COLUMN WIDTH
-        # =============================================
+        # =================================================
 
         for col in ws.columns:
 
@@ -485,10 +510,10 @@ for mt_name, mt_list in mt_groups.items():
 
             ws.column_dimensions[
                 col_letter
-            ].width = min(max_len + 1, 25)
+            ].width = min(max_len + 2, 30)
 
     # =================================================
-    # SAVE FILE
+    # SAVE FINAL FILE
     # =================================================
 
     final_stream = BytesIO()
@@ -511,4 +536,5 @@ for mt_name, mt_list in mt_groups.items():
 
         writer.write(final_stream.read())
 
-print("✅ FINAL DATAIKU VERSION READY")
+print("✅ FINAL WORKING DATAIKU VERSION READY")
+```
