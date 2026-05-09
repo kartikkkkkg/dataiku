@@ -4,23 +4,40 @@ import dataiku
 import pandas as pd
 from io import BytesIO
 from datetime import datetime, timedelta
-from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, PatternFill, Font
+from openpyxl.utils import get_column_letter
 
 # =====================================================
 # CONFIG
 # =====================================================
+
 ENABLE_MT_MERGE = True
 
 MERGE_MT = {
     "GCIO": ["GCIO-WEB", "GCIO-CIB"]
 }
 
-SKIP_MT = {"OPS WRB", "OPS CIB", "FCSO"}
+SKIP_MT = {
+    "OPS WRB",
+    "OPS CIB",
+    "FCSO"
+}
+
+SKIP_MT = {x.strip().upper() for x in SKIP_MT}
 
 # =====================================================
-# LOAD DATASETS (RAW DATASETS)
+# OUTPUT FOLDER
 # =====================================================
+
+output_folder = dataiku.Folder("yvmNqbID")
+
+# =====================================================
+# LOAD DATASETS (KEEP #NA)
+# =====================================================
+
 def load_dataset(name):
+
     return dataiku.Dataset(name).get_dataframe(
         na_values=[],
         keep_default_na=False
@@ -37,6 +54,7 @@ tf_df     = load_dataset("transfer")
 # =====================================================
 # CLEAN COLUMN NAMES
 # =====================================================
+
 report_df.columns = report_df.columns.str.strip()
 hc_df.columns     = hc_df.columns.str.strip()
 nj_df.columns     = nj_df.columns.str.strip()
@@ -46,110 +64,17 @@ fg_df.columns     = fg_df.columns.str.strip()
 tf_df.columns     = tf_df.columns.str.strip()
 
 # =====================================================
-# NORMALIZE FUNCTION
+# NORMALIZE
 # =====================================================
-def normalize(df, cols):
 
-    for col in cols:
+def normalize(series):
 
-        if col in df.columns:
-
-            df[col] = df[col].apply(
-                lambda x: x.strip().upper()
-                if isinstance(x, str)
-                else x
-            )
-
-    return df
-
-report_df = normalize(report_df, ["MT Domain"])
-hc_df     = normalize(hc_df, ["MT Domain"])
-nj_df     = normalize(nj_df, ["MT Domain"])
-lv_df     = normalize(lv_df, ["MT Domain"])
-jr_df     = normalize(jr_df, ["MT Domain"])
-fg_df     = normalize(fg_df, ["MT Domain"])
-
-tf_df = normalize(
-    tf_df,
-    ["MT Domain(To)", "MT Domain (actual)"]
-)
+    return series.astype(str).str.strip().str.upper()
 
 # =====================================================
-# CLEAN HEADERS
+# STYLING
 # =====================================================
-def clean_columns(df):
 
-    df = df.copy()
-
-    df.columns = [
-        ""
-        if str(col).startswith("col_")
-        or str(col).startswith("Unnamed")
-        else col
-        for col in df.columns
-    ]
-
-    return df
-
-# =====================================================
-# CHECK MT DOMAIN EXISTS
-# =====================================================
-if "MT Domain" not in hc_df.columns:
-
-    raise Exception(
-        f"MT Domain column missing in HC! "
-        f"Columns found: {list(hc_df.columns)}"
-    )
-
-
-# =====================================================
-# BUILD MT LIST FROM REPORT SHEET
-# =====================================================
-if "MT Domain" not in report_df.columns:
-
-    raise Exception(
-        f"MT Domain column missing in Report! "
-        f"Columns found: {list(report_df.columns)}"
-    )
-
-raw_mts = [
-    mt
-    for mt in report_df["MT Domain"].dropna().unique()
-    if mt not in SKIP_MT
-]
-
-mt_groups = {}
-
-if ENABLE_MT_MERGE:
-
-    for group, values in MERGE_MT.items():
-        mt_groups[group] = values
-
-    for mt in raw_mts:
-
-        if not any(mt in v for v in MERGE_MT.values()):
-            mt_groups[mt] = [mt]
-
-else:
-
-    for mt in raw_mts:
-        mt_groups[mt] = [mt]
-
-# =====================================================
-# DATE
-# =====================================================
-today = datetime.today()
-
-last_month_end = (
-    today.replace(day=1)
-    - timedelta(days=1)
-)
-
-date_str = last_month_end.strftime("%d%b%y")
-
-# =====================================================
-# STYLES
-# =====================================================
 HEADER_FILL = PatternFill(
     start_color="1F4E78",
     end_color="1F4E78",
@@ -176,65 +101,177 @@ TOTAL_FILL = PatternFill(
 TOTAL_FONT = Font(bold=True)
 
 # =====================================================
-# OUTPUT FOLDER
+# HELPERS
 # =====================================================
-output_folder = dataiku.Folder("yvmNqbID")
+
+def style_headers(ws):
+
+    for cell in ws[1]:
+
+        if cell.value not in [None, ""]:
+
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = CENTER_ALIGN
+
+def style_total_row(ws):
+
+    last_row = ws.max_row
+
+    for col in range(1, ws.max_column + 1):
+
+        cell = ws.cell(last_row, col)
+
+        cell.fill = TOTAL_FILL
+        cell.font = TOTAL_FONT
+        cell.alignment = CENTER_ALIGN
+
+def wrap_report_headers(ws):
+
+    for cell in ws[1]:
+
+        if cell.value:
+
+            cell.alignment = Alignment(
+                wrap_text=True,
+                vertical="center",
+                horizontal="center"
+            )
+
+# =====================================================
+# BUILD MT LIST FROM REPORT
+# =====================================================
+
+if "MT Domain" not in report_df.columns:
+
+    raise Exception(
+        f"MT Domain column missing in Report! "
+        f"Columns found: {list(report_df.columns)}"
+    )
+
+raw_mts = normalize(
+    report_df["MT Domain"]
+).dropna().unique()
+
+raw_mts = [
+    mt
+    for mt in raw_mts
+    if mt not in SKIP_MT
+]
+
+# =====================================================
+# MT GROUPING
+# =====================================================
+
+mt_groups = {}
+
+if ENABLE_MT_MERGE:
+
+    for group, values in MERGE_MT.items():
+
+        mt_groups[group] = values
+
+    for mt in raw_mts:
+
+        if not any(mt in v for v in MERGE_MT.values()):
+
+            mt_groups[mt] = [mt]
+
+else:
+
+    for mt in raw_mts:
+
+        mt_groups[mt] = [mt]
+
+# =====================================================
+# DATE
+# =====================================================
+
+today = datetime.today()
+
+last_month_end = (
+    today.replace(day=1)
+    - timedelta(days=1)
+)
+
+date_str = last_month_end.strftime("%d%b%y")
 
 # =====================================================
 # MAIN LOOP
 # =====================================================
+
 for mt_name, mt_list in mt_groups.items():
 
     # -------------------------------------------------
-    # FILTER FUNCTION
+    # FILTER REPORT
     # -------------------------------------------------
-    def filter_df(df):
 
-        if "MT Domain" not in df.columns:
-            return pd.DataFrame()
+    report_f = report_df[
+        normalize(report_df["MT Domain"]).isin(mt_list)
+    ].copy()
 
-        return df[
-            df["MT Domain"].isin(mt_list)
-        ]
+    hc_f = hc_df[
+        normalize(hc_df["MT Domain"]).isin(mt_list)
+    ].copy()
 
-    # -------------------------------------------------
-    # FILTER DATA
-    # -------------------------------------------------
-    report_f = clean_columns(filter_df(report_df))
-    hc_f     = clean_columns(filter_df(hc_df))
-    nj_f     = clean_columns(filter_df(nj_df))
-    lv_f     = clean_columns(filter_df(lv_df))
-    jr_f     = clean_columns(filter_df(jr_df))
-    fg_f     = clean_columns(filter_df(fg_df))
+    nj_f = nj_df[
+        normalize(nj_df["MT Domain"]).isin(mt_list)
+    ].copy()
+
+    lv_f = lv_df[
+        normalize(lv_df["MT Domain"]).isin(mt_list)
+    ].copy()
+
+    jr_f = jr_df[
+        normalize(jr_df["MT Domain"]).isin(mt_list)
+    ].copy()
+
+    fg_f = fg_df[
+        normalize(fg_df["MT Domain"]).isin(mt_list)
+    ].copy()
 
     # -------------------------------------------------
     # TRANSFER FILTER
     # -------------------------------------------------
-    if (
-        "MT Domain(To)" in tf_df.columns
-        and
-        "MT Domain (actual)" in tf_df.columns
-    ):
 
-        tf_f = tf_df[
-            (
-                tf_df["MT Domain(To)"].isin(mt_list)
-            )
-            |
-            (
-                tf_df["MT Domain (actual)"].isin(mt_list)
-            )
+    cond1 = normalize(
+        tf_df["MT Domain(To)"]
+    ).isin(mt_list)
+
+    cond2 = normalize(
+        tf_df["MT Domain (actual)"]
+    ).isin(mt_list)
+
+    tf_f = tf_df[
+        cond1 | cond2
+    ].copy()
+
+    # =================================================
+    # CLEAN HEADERS
+    # =================================================
+
+    for df in [
+        report_f,
+        hc_f,
+        nj_f,
+        lv_f,
+        jr_f,
+        fg_f,
+        tf_f
+    ]:
+
+        df.columns = [
+            ""
+            if str(col).startswith("col_")
+            or str(col).startswith("Unnamed")
+            else col
+            for col in df.columns
         ]
-
-    else:
-
-        tf_f = pd.DataFrame()
-
-    tf_f = clean_columns(tf_f)
 
     # =================================================
     # CREATE EXCEL
     # =================================================
+
     stream = BytesIO()
 
     with pd.ExcelWriter(
@@ -244,173 +281,205 @@ for mt_name, mt_list in mt_groups.items():
 
         report_f.to_excel(
             writer,
-            index=False,
-            sheet_name="Report"
+            sheet_name="Report",
+            index=False
         )
 
         hc_f.to_excel(
             writer,
-            index=False,
-            sheet_name="1_HC_Data"
+            sheet_name="1_HC_Data",
+            index=False
         )
 
         nj_f.to_excel(
             writer,
-            index=False,
-            sheet_name="2_NewJoiner"
+            sheet_name="2_NewJoiner",
+            index=False
         )
 
         lv_f.to_excel(
             writer,
-            index=False,
-            sheet_name="3_Leavers"
+            sheet_name="3_Leavers",
+            index=False
         )
 
         jr_f.to_excel(
             writer,
-            index=False,
-            sheet_name="4_JR"
+            sheet_name="4_JR",
+            index=False
         )
 
         fg_f.to_excel(
             writer,
-            index=False,
-            sheet_name="5_FG"
+            sheet_name="5_FG",
+            index=False
         )
 
         tf_f.to_excel(
             writer,
-            index=False,
-            sheet_name="6_Transfer"
+            sheet_name="6_Transfer",
+            index=False
         )
 
-        # =============================================
-        # SHEET FORMATTING
-        # =============================================
-        for name, sheet in writer.sheets.items():
+    stream.seek(0)
 
-            sheet.freeze_panes = "A2"
+    # =================================================
+    # POST PROCESS
+    # =================================================
+
+    wb = load_workbook(stream)
+
+    for ws in wb.worksheets:
+
+        ws.freeze_panes = "A2"
+
+        # ---------------------------------------------
+        # REPORT SHEET
+        # ---------------------------------------------
+
+        if ws.title == "Report":
+
+            wrap_report_headers(ws)
 
             # -----------------------------------------
-            # HEADER STYLE
+            # FIX HEADERS
             # -----------------------------------------
-            for cell in sheet[1]:
 
-                if cell.value not in [None, ""]:
+            for cell in ws[1]:
 
-                    cell.fill = HEADER_FILL
-                    cell.font = HEADER_FONT
-                    cell.alignment = CENTER_ALIGN
+                if (
+                    isinstance(cell.value, str)
+                    and
+                    (
+                        cell.value.startswith("Unnamed")
+                        or
+                        cell.value.startswith("col_")
+                    )
+                ):
 
-            # =========================================
-            # REPORT LOGIC
-            # =========================================
-            if name == "Report":
+                    cell.value = ""
 
-                last_row = sheet.max_row
-                total_row = last_row + 1
+            last_row = ws.max_row
+            total_row = last_row + 1
 
-                sheet.cell(total_row, 1, "TOTAL")
+            ws.cell(total_row, 1, "TOTAL")
 
-                # -------------------------------------
-                # ROUND + FORMAT NUMBERS
-                # -------------------------------------
-                for r in range(2, last_row + 1):
+            # -----------------------------------------
+            # ROUND + FORMAT
+            # -----------------------------------------
 
-                    for c in range(2, sheet.max_column + 1):
+            for r in range(2, last_row + 1):
 
-                        cell = sheet.cell(r, c)
-                        val = cell.value
+                for c in range(2, ws.max_column + 1):
 
-                        if isinstance(val, (int, float)):
+                    cell = ws.cell(r, c)
 
-                            cell.value = round(val)
+                    val = cell.value
+
+                    if pd.notnull(val):
+
+                        try:
+
+                            num = float(val)
+
+                            cell.value = round(num)
 
                             cell.number_format = '#,##0'
 
                             cell.alignment = CENTER_ALIGN
 
-                # -------------------------------------
-                # TOTAL ROW
-                # -------------------------------------
-                for col in range(2, sheet.max_column + 1):
+                        except:
 
-                    values = []
-                    has_non_numeric = False
+                            pass
 
-                    for r in range(2, last_row + 1):
+            # -----------------------------------------
+            # TOTAL ROW
+            # -----------------------------------------
 
-                        val = sheet.cell(r, col).value
+            for col in range(2, ws.max_column + 1):
 
-                        if val in [None, ""]:
-                            continue
+                values = []
+                has_non_numeric = False
 
-                        if isinstance(val, (int, float)):
+                for r in range(2, last_row + 1):
 
-                            values.append(val)
+                    val = ws.cell(r, col).value
 
-                        else:
-
-                            has_non_numeric = True
-
-                    # Skip text columns
-                    if (
-                        has_non_numeric
-                        or
-                        len(values) == 0
-                    ):
+                    if val in [None, ""]:
                         continue
 
-                    total_val = round(sum(values))
+                    try:
 
-                    total_cell = sheet.cell(
-                        total_row,
-                        col,
-                        total_val
+                        num = float(val)
+
+                        values.append(num)
+
+                    except:
+
+                        has_non_numeric = True
+
+                if (
+                    has_non_numeric
+                    or
+                    len(values) == 0
+                ):
+                    continue
+
+                total_val = round(sum(values))
+
+                total_cell = ws.cell(
+                    total_row,
+                    col,
+                    total_val
+                )
+
+                total_cell.number_format = '#,##0'
+
+                total_cell.alignment = CENTER_ALIGN
+
+            style_total_row(ws)
+
+        # ---------------------------------------------
+        # STYLE HEADERS
+        # ---------------------------------------------
+
+        style_headers(ws)
+
+        # ---------------------------------------------
+        # COLUMN WIDTH
+        # ---------------------------------------------
+
+        for col in ws.columns:
+
+            max_len = 0
+
+            col_letter = get_column_letter(
+                col[0].column
+            )
+
+            for cell in col:
+
+                if cell.value:
+
+                    max_len = max(
+                        max_len,
+                        len(str(cell.value))
                     )
 
-                    total_cell.number_format = '#,##0'
-
-                    total_cell.alignment = CENTER_ALIGN
-
-                # -------------------------------------
-                # TOTAL STYLE
-                # -------------------------------------
-                for col in range(1, sheet.max_column + 1):
-
-                    cell = sheet.cell(total_row, col)
-
-                    cell.fill = TOTAL_FILL
-                    cell.font = TOTAL_FONT
-                    cell.alignment = CENTER_ALIGN
-
-            # =========================================
-            # COLUMN WIDTH
-            # =========================================
-            for col_cells in sheet.columns:
-
-                max_len = 0
-
-                col_letter = col_cells[0].column_letter
-
-                for cell in col_cells:
-
-                    if cell.value:
-
-                        max_len = max(
-                            max_len,
-                            len(str(cell.value))
-                        )
-
-                sheet.column_dimensions[
-                    col_letter
-                ].width = min(max_len + 1, 25)
-
-    stream.seek(0)
+            ws.column_dimensions[
+                col_letter
+            ].width = min(max_len + 1, 25)
 
     # =================================================
-    # FILE NAME
+    # SAVE FINAL FILE
     # =================================================
+
+    final_stream = BytesIO()
+
+    wb.save(final_stream)
+
+    final_stream.seek(0)
+
     safe_mt = (
         str(mt_name)
         .replace("/", "_")
@@ -421,11 +490,8 @@ for mt_name, mt_list in mt_groups.items():
         f"T&O_HC_{date_str}_{safe_mt}.xlsx"
     )
 
-    # =================================================
-    # WRITE FILE
-    # =================================================
     with output_folder.get_writer(file_name) as writer:
 
-        writer.write(stream.read())
+        writer.write(final_stream.read())
 
-print("✅ FINAL PRODUCTION VERSION READY")
+print("✅ FINAL DATAIKU VERSION READY")
