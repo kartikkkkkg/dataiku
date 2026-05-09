@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 # CONFIG
 # =====================================================
 
-ENABLE_MT_MERGE = True
+ENABLE_MT_MERGE = False
 
 MERGE_MT = {
     "GCIO": ["GCIO-WEB", "GCIO-CIB"]
@@ -30,10 +30,10 @@ SKIP_MT = {x.strip().upper() for x in SKIP_MT}
 # OUTPUT FOLDER
 # =====================================================
 
-output_folder = dataiku.Folder("yvmNqbID")
+output_folder = dataiku.Folder("yvmNqblD")
 
 # =====================================================
-# LOAD DATASETS (KEEP #NA)
+# LOAD DATASETS
 # =====================================================
 
 def load_dataset(name):
@@ -55,13 +55,17 @@ tf_df     = load_dataset("transfer")
 # CLEAN COLUMN NAMES
 # =====================================================
 
-report_df.columns = report_df.columns.str.strip()
-hc_df.columns     = hc_df.columns.str.strip()
-nj_df.columns     = nj_df.columns.str.strip()
-lv_df.columns     = lv_df.columns.str.strip()
-jr_df.columns     = jr_df.columns.str.strip()
-fg_df.columns     = fg_df.columns.str.strip()
-tf_df.columns     = tf_df.columns.str.strip()
+for df in [
+    report_df,
+    hc_df,
+    nj_df,
+    lv_df,
+    jr_df,
+    fg_df,
+    tf_df
+]:
+
+    df.columns = df.columns.str.strip()
 
 # =====================================================
 # NORMALIZE
@@ -169,11 +173,17 @@ if ENABLE_MT_MERGE:
 
     for group, values in MERGE_MT.items():
 
-        mt_groups[group] = values
+        mt_groups[group] = [
+            x.strip().upper()
+            for x in values
+        ]
 
     for mt in raw_mts:
 
-        if not any(mt in v for v in MERGE_MT.values()):
+        if not any(
+            mt in v
+            for v in MERGE_MT.values()
+        ):
 
             mt_groups[mt] = [mt]
 
@@ -203,48 +213,54 @@ date_str = last_month_end.strftime("%d%b%y")
 for mt_name, mt_list in mt_groups.items():
 
     # -------------------------------------------------
-    # FILTER REPORT
+    # FILTER FUNCTION
     # -------------------------------------------------
 
-    report_f = report_df[
-        normalize(report_df["MT Domain"]).isin(mt_list)
-    ].copy()
+    def filter_df(df):
 
-    hc_f = hc_df[
-        normalize(hc_df["MT Domain"]).isin(mt_list)
-    ].copy()
+        if "MT Domain" not in df.columns:
+            return pd.DataFrame()
 
-    nj_f = nj_df[
-        normalize(nj_df["MT Domain"]).isin(mt_list)
-    ].copy()
+        return df[
+            normalize(df["MT Domain"]).isin(mt_list)
+        ].copy()
 
-    lv_f = lv_df[
-        normalize(lv_df["MT Domain"]).isin(mt_list)
-    ].copy()
+    # -------------------------------------------------
+    # FILTER ALL DATA
+    # -------------------------------------------------
 
-    jr_f = jr_df[
-        normalize(jr_df["MT Domain"]).isin(mt_list)
-    ].copy()
-
-    fg_f = fg_df[
-        normalize(fg_df["MT Domain"]).isin(mt_list)
-    ].copy()
+    report_f = filter_df(report_df)
+    hc_f     = filter_df(hc_df)
+    nj_f     = filter_df(nj_df)
+    lv_f     = filter_df(lv_df)
+    jr_f     = filter_df(jr_df)
+    fg_f     = filter_df(fg_df)
 
     # -------------------------------------------------
     # TRANSFER FILTER
     # -------------------------------------------------
 
-    cond1 = normalize(
-        tf_df["MT Domain(To)"]
-    ).isin(mt_list)
+    if (
+        "MT Domain(To)" in tf_df.columns
+        and
+        "MT Domain (actual)" in tf_df.columns
+    ):
 
-    cond2 = normalize(
-        tf_df["MT Domain (actual)"]
-    ).isin(mt_list)
+        cond1 = normalize(
+            tf_df["MT Domain(To)"]
+        ).isin(mt_list)
 
-    tf_f = tf_df[
-        cond1 | cond2
-    ].copy()
+        cond2 = normalize(
+            tf_df["MT Domain (actual)"]
+        ).isin(mt_list)
+
+        tf_f = tf_df[
+            cond1 | cond2
+        ].copy()
+
+    else:
+
+        tf_f = pd.DataFrame()
 
     # =================================================
     # CLEAN HEADERS
@@ -333,9 +349,9 @@ for mt_name, mt_list in mt_groups.items():
 
         ws.freeze_panes = "A2"
 
-        # ---------------------------------------------
+        # =============================================
         # REPORT SHEET
-        # ---------------------------------------------
+        # =============================================
 
         if ws.title == "Report":
 
@@ -399,6 +415,7 @@ for mt_name, mt_list in mt_groups.items():
             for col in range(2, ws.max_column + 1):
 
                 values = []
+
                 has_non_numeric = False
 
                 for r in range(2, last_row + 1):
@@ -439,15 +456,15 @@ for mt_name, mt_list in mt_groups.items():
 
             style_total_row(ws)
 
-        # ---------------------------------------------
+        # =============================================
         # STYLE HEADERS
-        # ---------------------------------------------
+        # =============================================
 
         style_headers(ws)
 
-        # ---------------------------------------------
+        # =============================================
         # COLUMN WIDTH
-        # ---------------------------------------------
+        # =============================================
 
         for col in ws.columns:
 
@@ -471,7 +488,7 @@ for mt_name, mt_list in mt_groups.items():
             ].width = min(max_len + 1, 25)
 
     # =================================================
-    # SAVE FINAL FILE
+    # SAVE FILE
     # =================================================
 
     final_stream = BytesIO()
