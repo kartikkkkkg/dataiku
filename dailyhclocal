@@ -1,0 +1,417 @@
+# ==============================================
+# CONSTANTS
+# ==============================================
+
+CURRENT_HC_PATH = RAW_DIR / CURRENT_HC_FILENAME
+
+LAST_HC_PATH = RAW_DIR / "hc_last_month.xlsx"
+
+# NEW
+LAST_ROLLUP_PATH = RAW_DIR / "last_month_rollup.xlsx"
+CURRENT_ROLLUP_PATH = RAW_DIR / "current_rollup.xlsx"
+
+MAPPING_WB_PATH = RAW_DIR / "mapping.xlsx"
+
+MAPPING_SHEET_NAME = "mapping"
+ROLLUP_SHEET_NAME = "rollup"
+
+OUTPUT_SHEET_NAME = "New_summary"
+
+# Column names in HC files
+COL_BANK_ID = "Bank ID"
+COL_BF_L6 = "Business Function Lvl 6"
+COL_EMP_TYPE_HC = "Employment Type"
+COL_FTE = "FTE"
+
+# Column names in mapping sheet
+COL_MAP_BF_L6 = "Business Function Lvl 6"
+COL_COST_CAT = "Cost Cat"
+COL_MT_DOMAIN = "MT Domain"
+COL_MT1_DOMAIN = "MT-1 Domain"
+COL_MAP_EMP_TYP = "Employment Type"
+COL_CONTR = "Contr/Non-Contr"
+
+# Rollup columns
+COL_ROLLUP_ID = "Employee ID"
+
+# NEW
+COL_ROLLUP_GBF = "Global Business Function"
+
+CONTR_VALUE_CONT = "Controllable"
+CONTR_VALUE_NON_CONT = "Non-Controllable"
+
+COST_CAT_ORDER = ["BAU", "CIO Mgmt", "TPS", "Proj"]
+
+TOTAL_LABELS = {
+    "BAU": "BAU TOTAL",
+    "CIO Mgmt": "CIO MGMT TOTAL",
+    "TPS": "TPS TOTAL",
+    "Proj": "PROJ TOTAL",
+}
+
+GRAND_TOTAL_LABEL = "GRAND TOTAL"
+
+COMMENT_THRESHOLD = 10
+
+
+---
+
+
+print("Loading rollups...")
+
+last_rollup = pd.read_excel(LAST_ROLLUP_PATH)
+curr_rollup = pd.read_excel(CURRENT_ROLLUP_PATH)
+
+# =====================================================
+# LAST MONTH ROLLUP MAP
+# =====================================================
+
+last_rollup_gbf_map = (
+    last_rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
+    .dropna(subset=[COL_ROLLUP_ID])
+    .assign(
+        **{
+            COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID]
+            .astype(str)
+            .str.strip()
+        }
+    )
+    .drop_duplicates(subset=[COL_ROLLUP_ID])
+    .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
+    .to_dict()
+)
+
+# =====================================================
+# CURRENT ROLLUP MAP
+# =====================================================
+
+curr_rollup_gbf_map = (
+    curr_rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
+    .dropna(subset=[COL_ROLLUP_ID])
+    .assign(
+        **{
+            COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID]
+            .astype(str)
+            .str.strip()
+        }
+    )
+    .drop_duplicates(subset=[COL_ROLLUP_ID])
+    .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
+    .to_dict()
+)
+
+
+---
+
+movements = classify_movements(
+    combined,
+    last_rollup_gbf_map,
+    curr_rollup_gbf_map,
+)
+
+---
+
+def classify_movements(
+    combined: pd.DataFrame,
+    last_rollup_gbf_map: dict,
+    curr_rollup_gbf_map: dict,
+) -> pd.DataFrame:
+
+    rows = []
+
+    def add_move(
+        bank_id,
+        mt_cc,
+        cost_cat,
+        mt_domain,
+        movement,
+        fte,
+        emp_type,
+        contr_side,
+        from_mt_cc=None,
+        to_mt_cc=None,
+    ):
+
+        if pd.isna(fte) or fte == 0:
+            return
+
+        rows.append(
+            {
+                COL_BANK_ID: bank_id,
+                "MT_CC": mt_cc,
+                COL_COST_CAT: cost_cat,
+                COL_MT_DOMAIN: mt_domain,
+                "Movement": movement,
+                "FTE": float(fte),
+                "EmpType": emp_type,
+                "ContrSide": contr_side,
+                "From_MT_CC": from_mt_cc,
+                "To_MT_CC": to_mt_cc,
+            }
+        )
+
+    # =====================================================
+    # MAIN LOOP
+    # =====================================================
+
+    for _, r in combined.iterrows():
+
+        bid = str(r[COL_BANK_ID]).strip()
+
+        has_last = pd.notna(r.get("MT_CC_last"))
+        has_curr = pd.notna(r.get("MT_CC_curr"))
+
+        mt_cc_last = r.get("MT_CC_last")
+        mt_cc_curr = r.get("MT_CC_curr")
+
+        cost_last = r.get(f"{COL_COST_CAT}_last")
+        cost_curr = r.get(f"{COL_COST_CAT}_curr")
+
+        mt_last = r.get(f"{COL_MT_DOMAIN}_last")
+        mt_curr = r.get(f"{COL_MT_DOMAIN}_curr")
+
+        fte_last = r.get(f"{COL_FTE}_last")
+        fte_curr = r.get(f"{COL_FTE}_curr")
+
+        emp_last = r.get(f"{COL_EMP_TYPE_HC}_last")
+        emp_curr = r.get(f"{COL_EMP_TYPE_HC}_curr")
+
+        contr_last = r.get("ContrFlag_last")
+        contr_curr = r.get("ContrFlag_curr")
+
+        # =================================================
+        # CASE 1:
+        # NOT IN LAST HC + IN CURRENT HC
+        # =================================================
+
+        if has_curr and not has_last:
+
+            last_gbf = last_rollup_gbf_map.get(bid)
+
+            # TRUE NEW JOINER
+            if not last_gbf:
+
+                movement = "New Joiners"
+
+                add_move(
+                    bid,
+                    mt_cc_curr,
+                    cost_curr,
+                    mt_curr,
+                    movement,
+                    fte_curr,
+                    emp_curr,
+                    contr_curr,
+                )
+
+            else:
+
+                gbf_lower = str(last_gbf).strip().lower()
+
+                # NON TNO JOINER
+                if "tech" not in gbf_lower and "ops" not in gbf_lower:
+
+                    movement = "Non TnO Joiners"
+
+                    add_move(
+                        bid,
+                        mt_cc_curr,
+                        cost_curr,
+                        mt_curr,
+                        movement,
+                        fte_curr,
+                        emp_curr,
+                        contr_curr,
+                    )
+
+        # =================================================
+        # CASE 2:
+        # IN LAST HC + NOT IN CURRENT HC
+        # =================================================
+
+        elif has_last and not has_curr:
+
+            curr_gbf = curr_rollup_gbf_map.get(bid)
+
+            # STILL IN BANK
+            if curr_gbf:
+
+                gbf_lower = str(curr_gbf).strip().lower()
+
+                # MOVED OUT OF TNO
+                if "tech" not in gbf_lower and "ops" not in gbf_lower:
+
+                    add_move(
+                        bank_id=bid,
+                        mt_cc=mt_cc_last,
+                        cost_cat=cost_last,
+                        mt_domain=mt_last,
+                        movement="TnO Leavers",
+                        fte=fte_last,
+                        emp_type=emp_last,
+                        contr_side=contr_last,
+                        to_mt_cc=curr_gbf,
+                    )
+
+            else:
+
+                # LEFT BANK
+                add_move(
+                    bid,
+                    mt_cc_last,
+                    cost_last,
+                    mt_last,
+                    "Left Bank",
+                    fte_last,
+                    emp_last,
+                    contr_last,
+                )
+
+        # =================================================
+        # CASE 3:
+        # IN BOTH HC FILES
+        # =================================================
+
+        elif has_last and has_curr:
+
+            same_mtcc = mt_cc_last == mt_cc_curr
+
+            # SAME MTCC
+            if same_mtcc:
+
+                # Conversion In
+                if (
+                    contr_last == CONTR_VALUE_NON_CONT
+                    and contr_curr == CONTR_VALUE_CONT
+                ):
+
+                    add_move(
+                        bid,
+                        mt_cc_curr,
+                        cost_curr,
+                        mt_curr,
+                        "Conversion in",
+                        fte_curr,
+                        emp_curr,
+                        contr_curr,
+                    )
+
+                # Conversion Out
+                elif (
+                    contr_last == CONTR_VALUE_CONT
+                    and contr_curr == CONTR_VALUE_NON_CONT
+                ):
+
+                    add_move(
+                        bid,
+                        mt_cc_curr,
+                        cost_curr,
+                        mt_curr,
+                        "Conversion out",
+                        fte_curr,
+                        emp_curr,
+                        contr_curr,
+                    )
+
+            # TRANSFER INSIDE TNO
+            else:
+
+                # Transfer Out
+                add_move(
+                    bid,
+                    mt_cc_last,
+                    cost_last,
+                    mt_last,
+                    "Transfer out",
+                    fte_last,
+                    emp_last,
+                    contr_last,
+                    from_mt_cc=None,
+                    to_mt_cc=mt_cc_curr,
+                )
+
+                # Transfer In
+                add_move(
+                    bid,
+                    mt_cc_curr,
+                    cost_curr,
+                    mt_curr,
+                    "Transfer in",
+                    fte_curr,
+                    emp_curr,
+                    contr_curr,
+                    from_mt_cc=mt_cc_last,
+                    to_mt_cc=None,
+                )
+
+    # =====================================================
+    # RETURN
+    # =====================================================
+
+    if not rows:
+
+        return pd.DataFrame(
+            columns=[
+                COL_BANK_ID,
+                "MT_CC",
+                COL_COST_CAT,
+                COL_MT_DOMAIN,
+                "Movement",
+                "FTE",
+                "EmpType",
+                "ContrSide",
+                "From_MT_CC",
+                "To_MT_CC",
+            ]
+        )
+
+    return pd.DataFrame(rows)
+
+
+
+-----
+
+LAST_ROLLUP_PATH = RAW_DIR / "last_month_rollup.xlsx"
+CURRENT_ROLLUP_PATH = RAW_DIR / "current_rollup.xlsx"
+
+COL_ROLLUP_GBF = "Global Business Function"
+
+
+---
+
+print("Loading rollups...")
+
+last_rollup = pd.read_excel(LAST_ROLLUP_PATH)
+curr_rollup = pd.read_excel(CURRENT_ROLLUP_PATH)
+
+# LAST MONTH ROLLUP MAP
+last_rollup_gbf_map = (
+    last_rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
+    .dropna(subset=[COL_ROLLUP_ID])
+    .assign(
+        **{
+            COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID]
+            .astype(str)
+            .str.strip()
+        }
+    )
+    .drop_duplicates(subset=[COL_ROLLUP_ID])
+    .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
+    .to_dict()
+)
+
+# CURRENT ROLLUP MAP
+curr_rollup_gbf_map = (
+    curr_rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
+    .dropna(subset=[COL_ROLLUP_ID])
+    .assign(
+        **{
+            COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID]
+            .astype(str)
+            .str.strip()
+        }
+    )
+    .drop_duplicates(subset=[COL_ROLLUP_ID])
+    .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
+    .to_dict()
+)
