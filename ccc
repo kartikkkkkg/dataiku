@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd
+import numpy as np
+from dataiku import pandasutils as pdu
+
+# =========================================================
+# Read Input Dataset
+# =========================================================
+
+NewJoiners_R_NH_Joined_prepared = dataiku.Dataset("NewJoiners_R_NH_Joined_prepared")
+df = NewJoiners_R_NH_Joined_prepared.get_dataframe()
+
+# =========================================================
+# Convert Dates
+# =========================================================
+
+df["Effective Date_parsed"] = pd.to_datetime(
+    df["Effective Date_parsed"],
+    errors="coerce"
+)
+
+df["As Of Date"] = pd.to_datetime(
+    df["As Of Date"],
+    errors="coerce"
+)
+
+# =========================================================
+# Fill blank Final Reason for Hire
+# =========================================================
+
+df["Final Reason for Hire"] = df["Final Reason for Hire"].fillna("New Hire")
+
+# =========================================================
+# Include / Exclude Logic
+# =========================================================
+
+exclude_condition = (
+    (df["hc_flag"].astype(str).str.lower().str.strip() == "in actuals") |
+    (df["Contr/Non-Contr"].astype(str).str.lower().str.strip() == "non-controllable") |
+    (df["Effective Date_parsed"] < df["As Of Date"])
+)
+
+df["Include/Exclude"] = np.where(
+    exclude_condition,
+    "Exclude",
+    "Include"
+)
+
+# =========================================================
+# Write Output Dataset
+# =========================================================
+
+NEW_JOINERS_exclude = dataiku.Dataset("NEW_JOINERS_exclude")
+NEW_JOINERS_exclude.write_with_schema(df)
