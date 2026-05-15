@@ -10,31 +10,40 @@ New_Joiners_prepared_joined_df = New_Joiners_prepared_joined.get_dataframe()
 HC_Joined_df = HC_Joined.get_dataframe()
 
 # =====================================================
-# Clean Position ID
+# STANDARDIZE POSITION ID
 # =====================================================
+
+def clean_position_id(x):
+    if pd.isna(x):
+        return ""
+    
+    # Convert to string
+    x = str(x).strip()
+    
+    # Remove trailing .0
+    if x.endswith(".0"):
+        x = x[:-2]
+    
+    return x
 
 New_Joiners_prepared_joined_df["Position ID"] = (
     New_Joiners_prepared_joined_df["Position ID"]
-    .fillna("")
-    .astype(str)
-    .str.strip()
+    .apply(clean_position_id)
 )
 
 HC_Joined_df["Position ID"] = (
     HC_Joined_df["Position ID"]
-    .fillna("")
-    .astype(str)
-    .str.strip()
+    .apply(clean_position_id)
 )
 
 # =====================================================
-# Create lookup set
+# CREATE LOOKUP SET
 # =====================================================
 
 hc_positions = set(HC_Joined_df["Position ID"])
 
 # =====================================================
-# Create HC flag
+# CREATE HC FLAG
 # =====================================================
 
 New_Joiners_prepared_joined_df["hc_flag"] = (
@@ -43,10 +52,8 @@ New_Joiners_prepared_joined_df["hc_flag"] = (
 )
 
 # =====================================================
-# Output
+# WRITE OUTPUT
 # =====================================================
 
-NewJoiners_HC_flag_df = New_Joiners_prepared_joined_df
-
-output_dataset = dataiku.Dataset("NewJoiners_HC_flag")
-output_dataset.write_with_schema(NewJoiners_HC_flag_df)
+output_dataset = dataiku.Dataset("YOUR_OUTPUT_DATASET_NAME")
+output_dataset.write_with_schema(New_Joiners_prepared_joined_df)
