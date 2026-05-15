@@ -1,0 +1,44 @@
+import dataiku
+import pandas as pd
+import numpy as np
+
+# Read datasets
+new_joiners = dataiku.Dataset("New_Joiners_prepared_joined")
+actuals = dataiku.Dataset("HC_Joined")
+
+new_joiners_df = new_joiners.get_dataframe()
+actuals_df = actuals.get_dataframe()
+
+# =====================================================
+# Create HC FLAG
+# =====================================================
+
+# Convert Position IDs to string for safe comparison
+new_joiners_df["Position ID"] = (
+    new_joiners_df["Position ID"]
+    .astype(str)
+    .str.strip()
+)
+
+actuals_df["Position ID"] = (
+    actuals_df["Position ID"]
+    .astype(str)
+    .str.strip()
+)
+
+# Create set of actuals position ids
+actual_position_ids = set(actuals_df["Position ID"].dropna())
+
+# Flag logic
+new_joiners_df["hc_flag"] = np.where(
+    new_joiners_df["Position ID"].isin(actual_position_ids),
+    "in actuals",
+    "not in actuals"
+)
+
+# =====================================================
+# Write output
+# =====================================================
+
+output_dataset = dataiku.Dataset("NewJoiners_HC_flag")
+output_dataset.write_with_schema(new_joiners_df)
