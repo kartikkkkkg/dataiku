@@ -57,3 +57,67 @@ New_Joiners_prepared_joined_df["hc_flag"] = (
 
 output_dataset = dataiku.Dataset("YOUR_OUTPUT_DATASET_NAME")
 output_dataset.write_with_schema(New_Joiners_prepared_joined_df)
+
+
+
+
+------- LEAVERS--------
+
+import dataiku
+import pandas as pd
+import numpy as np
+
+# Read datasets
+Leavers_prepared = dataiku.Dataset("Leavers_prepared")
+HC_Joined = dataiku.Dataset("HC_Joined")
+
+Leavers_prepared_df = Leavers_prepared.get_dataframe()
+HC_Joined_df = HC_Joined.get_dataframe()
+
+# =====================================================
+# STANDARDIZE POSITION ID
+# =====================================================
+
+def clean_position_id(x):
+    if pd.isna(x):
+        return ""
+    
+    x = str(x).strip()
+    
+    # Remove trailing .0
+    if x.endswith(".0"):
+        x = x[:-2]
+    
+    return x
+
+Leavers_prepared_df["Position ID"] = (
+    Leavers_prepared_df["Position ID"]
+    .apply(clean_position_id)
+)
+
+HC_Joined_df["Position ID"] = (
+    HC_Joined_df["Position ID"]
+    .apply(clean_position_id)
+)
+
+# =====================================================
+# CREATE LOOKUP SET
+# =====================================================
+
+hc_positions = set(HC_Joined_df["Position ID"])
+
+# =====================================================
+# CREATE HC FLAG
+# =====================================================
+
+Leavers_prepared_df["hc_flag"] = (
+    Leavers_prepared_df["Position ID"]
+    .apply(lambda x: "in actuals" if x in hc_positions else "not in actuals")
+)
+
+# =====================================================
+# WRITE OUTPUT
+# =====================================================
+
+output_dataset = dataiku.Dataset("Leavers_HC_flag")
+output_dataset.write_with_schema(Leavers_prepared_df)
