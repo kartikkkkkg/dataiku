@@ -96,3 +96,105 @@ JR_df["Estimated Joining Date"] = JR_df.apply(
 output_dataset = dataiku.Dataset("JR_NJ_Check")
 
 output_dataset.write_with_schema(JR_df)
+-------
+
+
+
+import dataiku
+import pandas as pd
+from datetime import datetime
+
+# =========================
+# INPUT DATASETS
+# =========================
+
+JR_df = dataiku.Dataset("JR_NJ_Check").get_dataframe()
+
+TRF_df = dataiku.Dataset("Transfers_filtered").get_dataframe()
+
+# =========================
+# CLEAN POSITION IDS
+# =========================
+
+# JR Position Number
+JR_df["Position Number"] = (
+    JR_df["Position Number"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
+
+# Transfer Position ID (To)
+TRF_df["Position ID (To)"] = (
+    TRF_df["Position ID (To)"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
+
+# =========================
+# DATE CONVERSION
+# =========================
+
+TRF_df["effective date of event (MM/DD/YYYY)"] = pd.to_datetime(
+    TRF_df["effective date of event (MM/DD/YYYY)"],
+    errors="coerce"
+).dt.tz_localize(None)
+
+# =========================
+# CREATE LOOKUP
+# =========================
+
+trf_lookup = TRF_df.set_index(
+    "Position ID (To)"
+)["effective date of event (MM/DD/YYYY)"].to_dict()
+
+# =========================
+# TODAY DATE
+# =========================
+
+today_date = pd.Timestamp.now().tz_localize(None)
+
+# =========================
+# FUNCTION
+# =========================
+
+def get_transfer_date(row):
+
+    pos_id = (
+        str(row["Position Number"])
+        .replace(".0", "")
+        .strip()
+    )
+
+    trf_effective_date = trf_lookup.get(pos_id)
+
+    # Position not found
+    if pd.isna(trf_effective_date):
+        return "Not in Trf report"
+
+    # Difference between today and transfer effective date
+    diff_days = (today_date - trf_effective_date).days
+
+    # Within last 3 months (~90 days)
+    if diff_days >= 0 and diff_days <= 90:
+        return trf_effective_date.strftime("%d %b %Y")
+
+    return "Not in Trf report"
+
+# =========================
+# CREATE COLUMN
+# =========================
+
+JR_df["Estimated Transfer Date"] = JR_df.apply(
+    get_transfer_date,
+    axis=1
+)
+
+# =========================
+# OUTPUT DATASET
+# =========================
+
+output_dataset = dataiku.Dataset("JR_TRF_Check")
+
+output_dataset.write_with_schema(JR_df)
