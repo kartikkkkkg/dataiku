@@ -7,6 +7,7 @@ from datetime import datetime
 # =========================
 
 JR_df = dataiku.Dataset("JRs_joined_joined_prepared_joined_joined").get_dataframe()
+
 NJ_df = dataiku.Dataset("NJ_hc_flag_joined_prepared").get_dataframe()
 
 # =========================
@@ -36,19 +37,21 @@ NJ_df["Position ID"] = (
 NJ_df["Effective Date_parsed"] = pd.to_datetime(
     NJ_df["Effective Date_parsed"],
     errors="coerce"
-)
+).dt.tz_localize(None)
 
 # =========================
 # CREATE LOOKUP
 # =========================
 
-nj_lookup = NJ_df.set_index("Position ID")["Effective Date_parsed"].to_dict()
+nj_lookup = NJ_df.set_index(
+    "Position ID"
+)["Effective Date_parsed"].to_dict()
 
 # =========================
 # TODAY DATE
 # =========================
 
-today_date = pd.to_datetime(datetime.today().date())
+today_date = pd.Timestamp.now().tz_localize(None)
 
 # =========================
 # FUNCTION
@@ -91,4 +94,5 @@ JR_df["Estimated Joining Date"] = JR_df.apply(
 # =========================
 
 output_dataset = dataiku.Dataset("JR_NJ_Check")
+
 output_dataset.write_with_schema(JR_df)
