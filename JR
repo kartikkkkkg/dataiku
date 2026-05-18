@@ -2,52 +2,93 @@ import dataiku
 import pandas as pd
 from datetime import datetime
 
+# =========================
 # INPUT DATASETS
-JR_df = dataiku.Dataset("YOUR_JR_DATASET").get_dataframe()
-NJ_df = dataiku.Dataset("YOUR_NEW_JOINER_DATASET").get_dataframe()
+# =========================
 
-# CLEAN POSITION ID
-JR_df["Position ID"] = JR_df["Position ID"].astype(str).str.strip()
-NJ_df["Position ID"] = NJ_df["Position ID"].astype(str).str.strip()
+JR_df = dataiku.Dataset("JRs_joined_joined_prepared_joined_joined").get_dataframe()
+NJ_df = dataiku.Dataset("NJ_hc_flag_joined_prepared").get_dataframe()
 
+# =========================
+# CLEAN POSITION IDS
+# =========================
+
+# JR Position Number
+JR_df["Position Number"] = (
+    JR_df["Position Number"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
+
+# NJ Position ID
+NJ_df["Position ID"] = (
+    NJ_df["Position ID"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
+
+# =========================
 # DATE CONVERSION
+# =========================
+
 NJ_df["Effective Date_parsed"] = pd.to_datetime(
     NJ_df["Effective Date_parsed"],
     errors="coerce"
 )
 
+# =========================
 # CREATE LOOKUP
+# =========================
+
 nj_lookup = NJ_df.set_index("Position ID")["Effective Date_parsed"].to_dict()
 
+# =========================
 # TODAY DATE
+# =========================
+
 today_date = pd.to_datetime(datetime.today().date())
 
+# =========================
 # FUNCTION
+# =========================
+
 def get_estimated_joining_date(row):
 
-    pos_id = row["Position ID"]
+    pos_id = (
+        str(row["Position Number"])
+        .replace(".0", "")
+        .strip()
+    )
 
     nj_effective_date = nj_lookup.get(pos_id)
 
-    # Position ID not found
+    # Position not found
     if pd.isna(nj_effective_date):
         return "Not in New Joiner"
 
-    # Difference in days
+    # Difference between today and NJ effective date
     diff_days = (today_date - nj_effective_date).days
 
     # Within last 3 months (~90 days)
-    if diff_days <= 90 and diff_days >= 0:
+    if diff_days >= 0 and diff_days <= 90:
         return nj_effective_date.strftime("%d %b %Y")
 
     return "Not in New Joiner"
 
+# =========================
 # CREATE COLUMN
+# =========================
+
 JR_df["Estimated Joining Date"] = JR_df.apply(
     get_estimated_joining_date,
     axis=1
 )
 
-# OUTPUT
-output_dataset = dataiku.Dataset("YOUR_OUTPUT_DATASET")
+# =========================
+# OUTPUT DATASET
+# =========================
+
+output_dataset = dataiku.Dataset("JR_NJ_Check")
 output_dataset.write_with_schema(JR_df)
