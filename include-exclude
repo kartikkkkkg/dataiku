@@ -1,0 +1,16 @@
+if(
+
+    val("hc_flag") == "not in actuals"
+    
+    || val("Effective Date_parsed") < val("As Of Date_parsed")
+    
+    || lowercase(val("Contr/Non-Contr")) == "non-controllable"
+    
+    || uppercase(val("Employee Class Description")) == "NEW - NON OUTSOURCED"
+    
+    || uppercase(val("Employee Class Description")) == "NEW - OUTSOURCED",
+
+    "Exclude",
+
+    "Include"
+)
