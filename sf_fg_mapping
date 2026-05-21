@@ -1,0 +1,117 @@
+import pandas as pd
+import dataiku
+
+# ============================================
+# READ DATASETS
+# ============================================
+
+sf = dataiku.Dataset("SF_Report").get_dataframe()
+
+fg = dataiku.Dataset("FG_Report").get_dataframe()
+
+# ============================================
+# CLEAN POSITION IDS
+# ============================================
+
+sf["Position_ID"] = (
+    sf["SF_Position_Code"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
+
+fg["Position_ID"] = (
+    fg["FG_Position_ID"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
+
+# ============================================
+# FG LOGIC
+# TRUE  -> Replacement
+# FALSE -> New Hire
+# ============================================
+
+fg["FG_Reason"] = fg[
+    "FG_Is this request being created to replace an existing NEW?"
+].map({
+    True: "Replacement",
+    False: "New Hire"
+})
+
+# ============================================
+# SF LOGIC
+# ============================================
+
+def normalize_sf(x):
+
+    # Blank/null -> New Hire
+    if pd.isna(x):
+        return "New Hire"
+
+    x = str(x).lower().strip()
+
+    # Any text containing replacement
+    if "replacement" in x:
+        return "Replacement"
+
+    # Everything else
+    return "New Hire"
+
+sf["SF_Reason_Normalized"] = sf[
+    "SF_Reason_for_Hire"
+].apply(normalize_sf)
+
+# ============================================
+# FULL OUTER JOIN
+# ============================================
+
+merged = pd.merge(
+    sf,
+    fg,
+    on="Position_ID",
+    how="outer"
+)
+
+# ============================================
+# FINAL PRIORITY LOGIC
+# FG HAS PRIORITY
+# ============================================
+
+def final_reason(row):
+
+    fg_reason = row.get("FG_Reason")
+
+    # If FG exists -> use FG only
+    if pd.notna(fg_reason):
+
+        if fg_reason == "Replacement":
+            return "Replacement"
+
+        return "New Hire"
+
+    # If FG missing -> use SF
+    if row.get("SF_Reason_Normalized") == "Replacement":
+        return "Replacement"
+
+    return "New Hire"
+
+merged["Final_Reason_for_Hire"] = merged.apply(
+    final_reason,
+    axis=1
+)
+
+# ============================================
+# FINAL POSITION ID
+# ============================================
+
+merged["Final_Position_ID"] = merged["Position_ID"]
+
+# ============================================
+# WRITE OUTPUT
+# ============================================
+
+output = dataiku.Dataset("SF_FG_Final")
+
+output.write_with_schema(merged)
