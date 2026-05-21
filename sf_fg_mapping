@@ -1,117 +1,106 @@
+Then keep ONLY these 4 columns in final output:
+
+Column Name
+
+Position Code
+
+Reason for Hire From SF
+
+Reason for Hire from FG
+
+Final Reason for Hire
+
+Exactly like your screenshot.
+
+Use this final cleaned code:
+
 import pandas as pd
 import dataiku
-
 # ============================================
 # READ DATASETS
 # ============================================
-
 sf = dataiku.Dataset("SF_Report").get_dataframe()
-
 fg = dataiku.Dataset("FG_Report").get_dataframe()
-
 # ============================================
 # CLEAN POSITION IDS
 # ============================================
-
 sf["Position_ID"] = (
-    sf["SF_Position_Code"]
+    sf["Position Code"]
     .astype(str)
     .str.replace(".0", "", regex=False)
     .str.strip()
 )
-
 fg["Position_ID"] = (
-    fg["FG_Position_ID"]
+    fg["Position ID"]
     .astype(str)
     .str.replace(".0", "", regex=False)
     .str.strip()
 )
-
 # ============================================
 # FG LOGIC
-# TRUE  -> Replacement
-# FALSE -> New Hire
 # ============================================
-
-fg["FG_Reason"] = fg[
-    "FG_Is this request being created to replace an existing NEW?"
+fg["Reason for Hire from FG"] = fg[
+    "Is this request being created to replace an existing NEW?"
 ].map({
     True: "Replacement",
     False: "New Hire"
 })
-
 # ============================================
 # SF LOGIC
 # ============================================
-
 def normalize_sf(x):
-
-    # Blank/null -> New Hire
     if pd.isna(x):
         return "New Hire"
-
     x = str(x).lower().strip()
-
-    # Any text containing replacement
     if "replacement" in x:
         return "Replacement"
-
-    # Everything else
     return "New Hire"
-
-sf["SF_Reason_Normalized"] = sf[
-    "SF_Reason_for_Hire"
+sf["Reason for Hire From SF"] = sf[
+    "Reason for Hire"
 ].apply(normalize_sf)
-
 # ============================================
 # FULL OUTER JOIN
 # ============================================
-
 merged = pd.merge(
     sf,
     fg,
     on="Position_ID",
     how="outer"
 )
-
 # ============================================
-# FINAL PRIORITY LOGIC
+# FINAL LOGIC
 # FG HAS PRIORITY
 # ============================================
-
 def final_reason(row):
-
-    fg_reason = row.get("FG_Reason")
-
-    # If FG exists -> use FG only
+    fg_reason = row.get("Reason for Hire from FG")
+    # If FG exists, use FG only
     if pd.notna(fg_reason):
-
         if fg_reason == "Replacement":
             return "Replacement"
-
         return "New Hire"
-
-    # If FG missing -> use SF
-    if row.get("SF_Reason_Normalized") == "Replacement":
+    # Else use SF
+    if row.get("Reason for Hire From SF") == "Replacement":
         return "Replacement"
-
     return "New Hire"
-
-merged["Final_Reason_for_Hire"] = merged.apply(
+merged["Final Reason for Hire"] = merged.apply(
     final_reason,
     axis=1
 )
-
 # ============================================
-# FINAL POSITION ID
+# FINAL POSITION CODE
 # ============================================
-
-merged["Final_Position_ID"] = merged["Position_ID"]
-
+merged["Position Code"] = merged["Position_ID"]
+# ============================================
+# KEEP ONLY REQUIRED COLUMNS
+# ============================================
+final_df = merged[[
+    "Position Code",
+    "Reason for Hire From SF",
+    "Reason for Hire from FG",
+    "Final Reason for Hire"
+]]
 # ============================================
 # WRITE OUTPUT
 # ============================================
-
-output = dataiku.Dataset("SF_FG_Final")
-
-output.write_with_schema(merged)
+output = dataiku.Dataset("SF_FG")
+output.write_with_schema(final_df)
