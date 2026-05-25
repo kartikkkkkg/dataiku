@@ -12,42 +12,44 @@ raw = dataiku.Dataset("fg_raw").get_dataframe()
 joined = dataiku.Dataset("fg_joined").get_dataframe()
 
 # =========================================================
-# CLEAN KEY COLUMNS
+# CLEAN JOB REQUISITION ID
 # =========================================================
 
-key_cols = ["Position ID", "Job Requisition ID"]
+raw["Job Requisition ID"] = (
+    raw["Job Requisition ID"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
 
-for col in key_cols:
-
-    raw[col] = (
-        raw[col]
-        .astype(str)
-        .str.replace(".0", "", regex=False)
-        .str.strip()
-    )
-
-    joined[col] = (
-        joined[col]
-        .astype(str)
-        .str.replace(".0", "", regex=False)
-        .str.strip()
-    )
+joined["Job Requisition ID"] = (
+    joined["Job Requisition ID"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
 
 # =========================================================
-# REMOVE "nan" STRING ISSUES
+# REMOVE STRING 'nan'
 # =========================================================
 
-raw["Position ID"] = raw["Position ID"].replace("nan", "")
-joined["Position ID"] = joined["Position ID"].replace("nan", "")
+raw["Job Requisition ID"] = (
+    raw["Job Requisition ID"]
+    .replace("nan", "")
+)
+
+joined["Job Requisition ID"] = (
+    joined["Job Requisition ID"]
+    .replace("nan", "")
+)
 
 # =========================================================
-# STEP 1 — COUNT ORIGINAL FG RECORDS
+# STEP 1 — COUNT RAW FG RECORDS
 # =========================================================
-# Count Position ID + Job Requisition ID combinations
-# in ORIGINAL FG
+# Count how many times each JR ID exists in raw FG
 
 raw_count = (
-    raw.groupby(["Position ID", "Job Requisition ID"])
+    raw.groupby("Job Requisition ID")
     .size()
     .reset_index(name="raw_count")
 )
@@ -55,38 +57,40 @@ raw_count = (
 # =========================================================
 # STEP 2 — CREATE JOIN RANK
 # =========================================================
-# Helps identify fake duplicates created after joins
+# Helps identify fake duplicates created by joins
 
 joined["join_rank"] = 1
 
 mask = (
-    joined["Position ID"].notna() &
-    (joined["Position ID"] != "")
+    joined["Job Requisition ID"].notna() &
+    (joined["Job Requisition ID"] != "")
 )
 
 joined.loc[mask, "join_rank"] = (
     joined[mask]
-    .groupby(["Position ID", "Job Requisition ID"])
+    .groupby("Job Requisition ID")
     .cumcount() + 1
 )
 
 # =========================================================
-# STEP 3 — MERGE ORIGINAL COUNTS
+# STEP 3 — MERGE RAW COUNTS
 # =========================================================
 
 joined = joined.merge(
     raw_count,
-    on=["Position ID", "Job Requisition ID"],
+    on="Job Requisition ID",
     how="left"
 )
 
-# If key not found in raw
-joined["raw_count"] = joined["raw_count"].fillna(1)
+joined["raw_count"] = (
+    joined["raw_count"]
+    .fillna(1)
+)
 
 # =========================================================
 # STEP 4 — REMOVE FAKE DUPLICATES
 # =========================================================
-# Keep only rows that originally existed in FG
+# Keep only same count as original raw FG
 
 joined = joined[
     joined["join_rank"] <= joined["raw_count"]
@@ -96,24 +100,24 @@ joined = joined[
 # STEP 5 — REAL DUPLICATE LOGIC
 # =========================================================
 # Among REAL duplicates:
-# keep first
-# mark remaining as duplicate
+# first row = valid
+# second+ = Excl - duplicate
 
 joined["duplicate_rank"] = 1
 
 mask = (
-    joined["Position ID"].notna() &
-    (joined["Position ID"] != "")
+    joined["Job Requisition ID"].notna() &
+    (joined["Job Requisition ID"] != "")
 )
 
 joined.loc[mask, "duplicate_rank"] = (
     joined[mask]
-    .groupby(["Position ID", "Job Requisition ID"])
+    .groupby("Job Requisition ID")
     .cumcount() + 1
 )
 
 # =========================================================
-# STEP 6 — FINAL INCLUDE / EXCLUDE LOGIC
+# STEP 6 — FINAL STATUS LOGIC
 # =========================================================
 
 def final_status(row):
@@ -170,7 +174,7 @@ def final_status(row):
 joined["Final Status"] = joined.apply(final_status, axis=1)
 
 # =========================================================
-# CLEANUP HELPER COLUMNS
+# CLEANUP
 # =========================================================
 
 joined = joined.drop(
