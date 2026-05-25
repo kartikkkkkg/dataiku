@@ -8,116 +8,91 @@ import pandas as pd
 # Original FG raw dataset
 raw = dataiku.Dataset("fg_raw").get_dataframe()
 
-# Final FG dataset after joins
+# Joined FG dataset after all joins
 joined = dataiku.Dataset("fg_joined").get_dataframe()
 
 # =========================================================
-# CLEAN JOB REQUISITION ID
+# CLEAN KEY COLUMNS
 # =========================================================
 
-raw["Job Requisition ID"] = (
-    raw["Job Requisition ID"]
-    .astype(str)
-    .str.replace(".0", "", regex=False)
-    .str.strip()
-)
+key_cols = ["Position ID", "Job Requisition ID"]
 
-joined["Job Requisition ID"] = (
-    joined["Job Requisition ID"]
-    .astype(str)
-    .str.replace(".0", "", regex=False)
-    .str.strip()
-)
+for col in key_cols:
 
-# =========================================================
-# REMOVE STRING 'nan'
-# =========================================================
+    raw[col] = (
+        raw[col]
+        .astype(str)
+        .str.replace(".0", "", regex=False)
+        .str.strip()
+        .replace("nan", "")
+    )
 
-raw["Job Requisition ID"] = (
-    raw["Job Requisition ID"]
-    .replace("nan", "")
-)
-
-joined["Job Requisition ID"] = (
-    joined["Job Requisition ID"]
-    .replace("nan", "")
-)
+    joined[col] = (
+        joined[col]
+        .astype(str)
+        .str.replace(".0", "", regex=False)
+        .str.strip()
+        .replace("nan", "")
+    )
 
 # =========================================================
-# STEP 1 — COUNT RAW FG RECORDS
+# LOGIC 1
+# REMOVE FAKE DUPLICATES CREATED BY JOINS
+# USING:
+# Position ID + Job Requisition ID
 # =========================================================
-# Count how many times each JR ID exists in raw FG
 
+# Count original FG combinations
 raw_count = (
-    raw.groupby("Job Requisition ID")
+    raw.groupby(["Position ID", "Job Requisition ID"])
     .size()
     .reset_index(name="raw_count")
 )
 
-# =========================================================
-# STEP 2 — CREATE JOIN RANK
-# =========================================================
-# Helps identify fake duplicates created by joins
-
-joined["join_rank"] = 1
-
-mask = (
-    joined["Job Requisition ID"].notna() &
-    (joined["Job Requisition ID"] != "")
-)
-
-joined.loc[mask, "join_rank"] = (
-    joined[mask]
-    .groupby("Job Requisition ID")
+# Create rank in joined dataset
+joined["join_rank"] = (
+    joined.groupby(["Position ID", "Job Requisition ID"])
     .cumcount() + 1
 )
 
-# =========================================================
-# STEP 3 — MERGE RAW COUNTS
-# =========================================================
-
+# Merge raw counts
 joined = joined.merge(
     raw_count,
-    on="Job Requisition ID",
+    on=["Position ID", "Job Requisition ID"],
     how="left"
 )
 
-joined["raw_count"] = (
-    joined["raw_count"]
-    .fillna(1)
-)
+# If missing, assume 1
+joined["raw_count"] = joined["raw_count"].fillna(1)
 
-# =========================================================
-# STEP 4 — REMOVE FAKE DUPLICATES
-# =========================================================
-# Keep only same count as original raw FG
-
+# Keep only rows that existed in original FG
 joined = joined[
     joined["join_rank"] <= joined["raw_count"]
 ]
 
 # =========================================================
-# STEP 5 — REAL DUPLICATE LOGIC
+# LOGIC 2
+# REAL POSITION ID DUPLICATES
+# KEEP FIRST
+# MARK OTHERS AS DUPLICATE
 # =========================================================
-# Among REAL duplicates:
-# first row = valid
-# second+ = Excl - duplicate
 
-joined["duplicate_rank"] = 1
+joined["position_rank"] = 1
 
 mask = (
-    joined["Job Requisition ID"].notna() &
-    (joined["Job Requisition ID"] != "")
+    joined["Position ID"].notna() &
+    (joined["Position ID"] != "") &
+    (joined["Position ID"].str.lower() != "nan")
 )
 
-joined.loc[mask, "duplicate_rank"] = (
+joined.loc[mask, "position_rank"] = (
     joined[mask]
-    .groupby("Job Requisition ID")
+    .groupby("Position ID")
     .cumcount() + 1
 )
 
 # =========================================================
-# STEP 6 — FINAL STATUS LOGIC
+# FINAL INCLUDE / EXCLUDE LOGIC
 # =========================================================
 
 def final_status(row):
@@ -144,25 +119,25 @@ def final_status(row):
         return "Excl - MOW/MSW"
 
     # -----------------------------------------------------
-    # In New Joiner
+    # REAL POSITION DUPLICATES
+    # -----------------------------------------------------
+
+    if row["position_rank"] > 1:
+        return "Excl - duplicate"
+
+    # -----------------------------------------------------
+    # IN NEW JOINER
     # -----------------------------------------------------
 
     if str(row.get("Check in NJ", "")).strip() == "In New Joiner":
         return "Excl - in new joiner"
 
     # -----------------------------------------------------
-    # In Actuals
+    # IN ACTUALS
     # -----------------------------------------------------
 
     if str(row.get("Check In Actuals", "")).strip() == "In Actuals":
         return "Excl - in actuals"
-
-    # -----------------------------------------------------
-    # REAL DUPLICATES
-    # -----------------------------------------------------
-
-    if row["duplicate_rank"] > 1:
-        return "Excl - duplicate"
 
     # -----------------------------------------------------
     # DEFAULT
@@ -170,8 +145,19 @@ def final_status(row):
 
     return "Include"
 
-# Apply logic
+# Apply final logic
 joined["Final Status"] = joined.apply(final_status, axis=1)
+
+# =========================================================
+# CONVERT POSITION ID TO INTEGER
+# =========================================================
+
+joined["Position ID"] = pd.to_numeric(
+    joined["Position ID"],
+    errors="coerce"
+)
+
+joined["Position ID"] = joined["Position ID"].astype("Int64")
 
 # =========================================================
 # CLEANUP
@@ -181,7 +167,7 @@ joined = joined.drop(
     columns=[
         "join_rank",
         "raw_count",
-        "duplicate_rank"
+        "position_rank"
     ],
     errors="ignore"
 )
