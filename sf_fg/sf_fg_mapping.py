@@ -5,12 +5,16 @@ import dataiku
 # READ DATASETS
 # ============================================
 
-sf = dataiku.Dataset("SF_Report").get_dataframe()
+sf = dataiku.Dataset(
+    "Position_Download_report"
+).get_dataframe()
 
-fg = dataiku.Dataset("FG_Report").get_dataframe()
+fg = dataiku.Dataset(
+    "FG_JR_Prepared"
+).get_dataframe()
 
 # ============================================
-# CLEAN POSITION IDs
+# CLEAN POSITION IDS
 # ============================================
 
 sf["Position_ID"] = (
@@ -28,32 +32,28 @@ fg["Position_ID"] = (
 )
 
 # ============================================
-# REMOVE BLANK POSITION IDs
+# REMOVE BLANK POSITION IDS
 # ============================================
 
 sf = sf[
-    sf["Position_ID"].notna()
-]
-
-sf = sf[
-    sf["Position_ID"].str.strip() != ""
-]
-
-sf = sf[
-    sf["Position_ID"].str.lower() != "nan"
+    sf["Position_ID"].notna() &
+    (sf["Position_ID"] != "") &
+    (sf["Position_ID"].str.lower() != "nan")
 ]
 
 fg = fg[
-    fg["Position_ID"].notna()
+    fg["Position_ID"].notna() &
+    (fg["Position_ID"] != "") &
+    (fg["Position_ID"].str.lower() != "nan")
 ]
 
-fg = fg[
-    fg["Position_ID"].str.strip() != ""
-]
+# ============================================
+# DISTINCT POSITION IDS
+# ============================================
 
-fg = fg[
-    fg["Position_ID"].str.lower() != "nan"
-]
+sf = sf.drop_duplicates(subset=["Position_ID"])
+
+fg = fg.drop_duplicates(subset=["Position_ID"])
 
 # ============================================
 # FG LOGIC
@@ -87,21 +87,7 @@ sf["Reason for Hire From SF"] = sf[
 ].apply(normalize_sf)
 
 # ============================================
-# KEEP DISTINCT POSITION IDs
-# ============================================
-
-sf = sf.drop_duplicates(
-    subset=["Position_ID"],
-    keep="first"
-)
-
-fg = fg.drop_duplicates(
-    subset=["Position_ID"],
-    keep="first"
-)
-
-# ============================================
-# FULL OUTER JOIN
+# MERGE
 # ============================================
 
 merged = pd.merge(
@@ -120,7 +106,6 @@ def final_reason(row):
 
     fg_reason = row.get("Reason for Hire from FG")
 
-    # FG priority
     if pd.notna(fg_reason):
 
         if fg_reason == "Replacement":
@@ -128,7 +113,6 @@ def final_reason(row):
 
         return "New Hire"
 
-    # Else use SF
     if row.get("Reason for Hire From SF") == "Replacement":
         return "Replacement"
 
@@ -140,23 +124,10 @@ merged["Final Reason for Hire"] = merged.apply(
 )
 
 # ============================================
-# FINAL POSITION CODE
+# FINAL OUTPUT
 # ============================================
 
 merged["Position Code"] = merged["Position_ID"]
-
-# ============================================
-# FINAL DISTINCT CLEANUP
-# ============================================
-
-merged = merged.drop_duplicates(
-    subset=["Position Code"],
-    keep="first"
-)
-
-# ============================================
-# KEEP ONLY REQUIRED COLUMNS
-# ============================================
 
 final_df = merged[[
     "Position Code",
@@ -165,21 +136,42 @@ final_df = merged[[
     "Final Reason for Hire"
 ]]
 
+final_df = final_df.drop_duplicates(
+    subset=["Position Code"]
+)
+
+final_df["Position Code"] = (
+    pd.to_numeric(
+        final_df["Position Code"],
+        errors="coerce"
+    )
+    .astype("Int64")
+    .astype(str)
+)
+
 # ============================================
-# CONVERT POSITION CODE TO INTEGER
+# WRITE EXCEL TO SHAREPOINT FOLDER
 # ============================================
 
-final_df["Position Code"] = pd.to_numeric(
-    final_df["Position Code"],
-    errors="coerce"
-).astype("Int64")
+output_path = "/tmp/SF_FG.xlsx"
 
-# ============================================
-# WRITE OUTPUT
-# ============================================
+with pd.ExcelWriter(
+    output_path,
+    engine="openpyxl"
+) as writer:
 
-output = dataiku.Dataset("SF_FG")
+    final_df.to_excel(
+        writer,
+        sheet_name="SF_FG_Mapping",
+        index=False
+    )
 
-output.write_with_schema(final_df)
+folder = dataiku.Folder("Output")
 
-print("SF_FG Mapping Created Successfully")
+with folder.get_writer("SF_FG.xlsx") as writer:
+
+    with open(output_path, "rb") as f:
+
+        writer.write(f.read())
+
+print("SF_FG.xlsx uploaded successfully")
