@@ -1,53 +1,59 @@
-
 # -*- coding: utf-8 -*-
 
 import dataiku
 import pandas as pd
-import numpy as np
 from datetime import datetime
-import os
+
+# =========================================================
+# CHANGE INPUT DATASET NAMES HERE
+# =========================================================
+
+HEADCOUNT_DATASET = "CHANGE_HEADCOUNT_DATASET_NAME"
+NEW_JOINER_DATASET = "CHANGE_NEW_JOINER_DATASET_NAME"
+LEAVERS_DATASET = "CHANGE_LEAVERS_DATASET_NAME"
+JR_DATASET = "CHANGE_JR_DATASET_NAME"
+FG_DATASET = "CHANGE_FG_DATASET_NAME"
+TRANSFERS_DATASET = "CHANGE_TRANSFERS_DATASET_NAME"
+
+# =========================================================
+# CHANGE OUTPUT MANAGED FOLDER NAME HERE
+# =========================================================
+
+OUTPUT_FOLDER = "CHANGE_OUTPUT_FOLDER_NAME"
+
+# =========================================================
+# CHANGE OUTPUT DATASET NAME HERE
+# =========================================================
+
+OUTPUT_DATASET = "CHANGE_OUTPUT_DATASET_NAME"
 
 # =========================================================
 # READ INPUT DATASETS
 # =========================================================
 
-fg_clean = dataiku.Dataset("fg_clean")
-fg_clean_df = fg_clean.get_dataframe()
+headcount_df = dataiku.Dataset(
+    HEADCOUNT_DATASET
+).get_dataframe()
 
-JR_Trf_check_prepared_prepared_prepared_prepared = dataiku.Dataset(
-    "JR_Trf_check_prepared_prepared_prepared_prepared"
-)
-JR_Trf_check_prepared_prepared_prepared_prepared_df = (
-    JR_Trf_check_prepared_prepared_prepared_prepared.get_dataframe()
-)
+new_joiner_df = dataiku.Dataset(
+    NEW_JOINER_DATASET
+).get_dataframe()
 
-transfers_prepared_joined_joined_prepared_prepared_prepared = dataiku.Dataset(
-    "transfers_prepared_joined_joined_prepared_prepared_prepared"
-)
-transfers_prepared_joined_joined_prepared_prepared_prepared_df = (
-    transfers_prepared_joined_joined_prepared_prepared_prepared.get_dataframe()
-)
+leavers_df = dataiku.Dataset(
+    LEAVERS_DATASET
+).get_dataframe()
 
-NJ_hc_flag_joined_prepared = dataiku.Dataset(
-    "NJ_hc_flag_joined_prepared"
-)
-NJ_hc_flag_joined_prepared_df = (
-    NJ_hc_flag_joined_prepared.get_dataframe()
-)
+jr_df = dataiku.Dataset(
+    JR_DATASET
+).get_dataframe()
 
-Leavers_HC_Flagged_prepared = dataiku.Dataset(
-    "Leavers_HC_Flagged_prepared"
-)
-Leavers_HC_Flagged_prepared_df = (
-    Leavers_HC_Flagged_prepared.get_dataframe()
-)
+fg_df = dataiku.Dataset(
+    FG_DATASET
+).get_dataframe()
 
-MSTR_HC_joined_joineddd_joined_prepared_joined = dataiku.Dataset(
-    "MSTR_HC_joined_joineddd_joined_prepared_joined"
-)
-MSTR_HC_joined_joineddd_joined_prepared_joined_df = (
-    MSTR_HC_joined_joineddd_joined_prepared_joined.get_dataframe()
-)
+transfers_df = dataiku.Dataset(
+    TRANSFERS_DATASET
+).get_dataframe()
 
 # =========================================================
 # DYNAMIC FILE NAME
@@ -56,9 +62,6 @@ MSTR_HC_joined_joineddd_joined_prepared_joined_df = (
 today = datetime.today()
 
 date_str = today.strftime("%d%b%y")
-
-# Example:
-# T&O_HC_25May26.xlsx
 
 file_name = f"T&O_HC_{date_str}.xlsx"
 
@@ -71,82 +74,80 @@ output_path = f"/tmp/{file_name}"
 with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
 
     # -----------------------------------------------------
-    # HEADCOUNT
+    # HEADCOUNT SHEET
     # -----------------------------------------------------
 
-    MSTR_HC_joined_joineddd_joined_prepared_joined_df.to_excel(
+    headcount_df.to_excel(
         writer,
         sheet_name="Headcount",
         index=False
     )
 
     # -----------------------------------------------------
-    # NEW JOINERS
+    # NEW JOINERS SHEET
     # -----------------------------------------------------
 
-    NJ_hc_flag_joined_prepared_df.to_excel(
+    new_joiner_df.to_excel(
         writer,
         sheet_name="New Joiners",
         index=False
     )
 
     # -----------------------------------------------------
-    # LEAVERS
+    # LEAVERS SHEET
     # -----------------------------------------------------
 
-    Leavers_HC_Flagged_prepared_df.to_excel(
+    leavers_df.to_excel(
         writer,
         sheet_name="Leavers",
         index=False
     )
 
     # -----------------------------------------------------
-    # JR
+    # JR SHEET
     # -----------------------------------------------------
 
-    JR_Trf_check_prepared_prepared_prepared_prepared_df.to_excel(
+    jr_df.to_excel(
         writer,
         sheet_name="JR",
         index=False
     )
 
     # -----------------------------------------------------
-    # FG
+    # FG SHEET
     # -----------------------------------------------------
 
-    fg_clean_df.to_excel(
+    fg_df.to_excel(
         writer,
         sheet_name="FG",
         index=False
     )
 
     # -----------------------------------------------------
-    # TRANSFERS
+    # TRANSFERS SHEET
     # -----------------------------------------------------
 
-    transfers_prepared_joined_joined_prepared_prepared_prepared_df.to_excel(
+    transfers_df.to_excel(
         writer,
         sheet_name="Transfers",
         index=False
     )
 
 # =========================================================
-# SAVE FILE TO MANAGED FOLDER
+# SAVE EXCEL FILE TO MANAGED FOLDER
 # =========================================================
 
-# Replace "Central" if your managed folder name is different
-
-folder = dataiku.Folder("Central")
+folder = dataiku.Folder(OUTPUT_FOLDER)
 
 with folder.get_writer(file_name) as writer:
     with open(output_path, "rb") as f:
         writer.write(f.read())
 
 # =========================================================
-# CREATE SMALL OUTPUT DATASET
+# CREATE OUTPUT DATASET
 # =========================================================
 
-Central_df = pd.DataFrame({
+output_df = pd.DataFrame({
     "File_Name": [file_name],
     "Created_On": [datetime.now()],
     "Status": ["Success"]
@@ -156,9 +157,17 @@ Central_df = pd.DataFrame({
 # WRITE OUTPUT DATASET
 # =========================================================
 
-Central = dataiku.Dataset("Central")
+output_dataset = dataiku.Dataset(OUTPUT_DATASET)
 
-Central.write_with_schema(Central_df)
+output_dataset.write_with_schema(output_df)
 
+# =========================================================
+# SUCCESS MESSAGE
+# =========================================================
+
+print("====================================")
 print("Excel File Created Successfully")
+print("====================================")
 print(file_name)
+print("Saved to folder:", OUTPUT_FOLDER)
+print("====================================")
