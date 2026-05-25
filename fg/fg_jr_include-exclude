@@ -1,0 +1,84 @@
+import pandas as pd
+
+# ==========================================
+# CLEAN POSITION ID
+# ==========================================
+
+fg["Position ID"] = (
+    fg["Position ID"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
+
+# ==========================================
+# RAW DUPLICATE LOGIC
+# ==========================================
+
+fg["dup_rank"] = (
+    fg.groupby("Position ID")
+    .cumcount() + 1
+)
+
+# ==========================================
+# FINAL STATUS LOGIC
+# ==========================================
+
+def final_status(row):
+
+    # =====================================
+    # 1. MOW / MSW
+    # =====================================
+
+    if str(row.get("Employment Type", "")).strip() in [
+        "Managed Outcome Worker",
+        "Managed Service Worker"
+    ]:
+        return "Excl - MOW/MSW"
+
+    # =====================================
+    # 2. Blank Position ID
+    # =====================================
+
+    if (
+        pd.isna(row.get("Position ID")) or
+        str(row.get("Position ID")).strip() == ""
+    ):
+        return "Excl - Blank Pos ID"
+
+    # =====================================
+    # 3. RAW DUPLICATES
+    # =====================================
+
+    if row["dup_rank"] > 1:
+        return "Excl - duplicate"
+
+    # =====================================
+    # 4. In New Joiner
+    # =====================================
+
+    if str(row.get("Check in New Joiner", "")).strip() == "In New Joiner":
+        return "Excl - in new joiner"
+
+    # =====================================
+    # 5. In Actuals
+    # =====================================
+
+    if str(row.get("Check in Actuals", "")).strip() == "In Actuals":
+        return "Excl - in actual"
+
+    # =====================================
+    # 6. DEFAULT
+    # =====================================
+
+    return "Include"
+
+
+# Create final status column
+fg["Final Status"] = fg.apply(final_status, axis=1)
+
+# ==========================================
+# DROP HELPER COLUMN
+# ==========================================
+
+fg = fg.drop(columns=["dup_rank"], errors="ignore")
