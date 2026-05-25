@@ -1,38 +1,37 @@
 import pandas as pd
 import dataiku
 
-# =====================================================
-# CHANGE DATASET NAMES HERE
-# =====================================================
+# ============================================
+# READ DATASETS
+# ============================================
 
 # Original raw FG dataset
-fg_raw = dataiku.Dataset("FG_RAW").get_dataframe()
+fg_raw = dataiku.Dataset("FG_Raw").get_dataframe()
 
-# Final FG dataset after all joins
-fg_final = dataiku.Dataset("FG_FINAL_JOINED").get_dataframe()
+# Final FG dataset after joins
+fg_final = dataiku.Dataset("FG_Final_Joined").get_dataframe()
 
-# Output dataset
-output_dataset = dataiku.Dataset("FG_FINAL_DEDUPED")
-
-# =====================================================
-# CLEAN POSITION ID
-# =====================================================
+# ============================================
+# CLEAN POSITION IDS
+# ============================================
 
 fg_raw["Position ID"] = (
     fg_raw["Position ID"]
     .astype(str)
+    .str.replace(".0", "", regex=False)
     .str.strip()
 )
 
 fg_final["Position ID"] = (
     fg_final["Position ID"]
     .astype(str)
+    .str.replace(".0", "", regex=False)
     .str.strip()
 )
 
-# =====================================================
-# STEP 1 — RAW FG COUNT
-# =====================================================
+# ============================================
+# GET ORIGINAL COUNTS
+# ============================================
 
 raw_counts = (
     fg_raw
@@ -41,9 +40,9 @@ raw_counts = (
     .reset_index(name="raw_count")
 )
 
-# =====================================================
-# STEP 2 — ADD ROW NUMBER IN FINAL DATA
-# =====================================================
+# ============================================
+# ADD ROW NUMBER IN FINAL DATASET
+# ============================================
 
 fg_final["row_num"] = (
     fg_final
@@ -51,9 +50,9 @@ fg_final["row_num"] = (
     .cumcount() + 1
 )
 
-# =====================================================
-# STEP 3 — JOIN RAW COUNTS
-# =====================================================
+# ============================================
+# MERGE ORIGINAL COUNTS
+# ============================================
 
 fg_final = fg_final.merge(
     raw_counts,
@@ -61,23 +60,30 @@ fg_final = fg_final.merge(
     how="left"
 )
 
-# If Position ID not found in raw
-fg_final["raw_count"] = fg_final["raw_count"].fillna(0)
+# If somehow missing in raw
+fg_final["raw_count"] = fg_final["raw_count"].fillna(1)
 
-# =====================================================
-# STEP 4 — DUPLICATE LOGIC
-# =====================================================
+# ============================================
+# KEEP ONLY VALID ROWS
+# ============================================
 
-fg_final["Duplicate Status"] = fg_final.apply(
-    lambda x:
-        "Excl - duplicate"
-        if x["row_num"] > x["raw_count"]
-        else "Valid",
-    axis=1
+fg_final_cleaned = fg_final[
+    fg_final["row_num"] <= fg_final["raw_count"]
+]
+
+# ============================================
+# DROP HELPER COLUMNS
+# ============================================
+
+fg_final_cleaned = fg_final_cleaned.drop(
+    columns=["row_num", "raw_count"],
+    errors="ignore"
 )
 
-# =====================================================
+# ============================================
 # WRITE OUTPUT
-# =====================================================
+# ============================================
 
-output_dataset.write_with_schema(fg_final)
+output = dataiku.Dataset("FG_Cleaned")
+
+output.write_with_schema(fg_final_cleaned)
