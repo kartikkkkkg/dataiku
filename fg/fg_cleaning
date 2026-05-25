@@ -1,0 +1,83 @@
+import pandas as pd
+import dataiku
+
+# =====================================================
+# CHANGE DATASET NAMES HERE
+# =====================================================
+
+# Original raw FG dataset
+fg_raw = dataiku.Dataset("FG_RAW").get_dataframe()
+
+# Final FG dataset after all joins
+fg_final = dataiku.Dataset("FG_FINAL_JOINED").get_dataframe()
+
+# Output dataset
+output_dataset = dataiku.Dataset("FG_FINAL_DEDUPED")
+
+# =====================================================
+# CLEAN POSITION ID
+# =====================================================
+
+fg_raw["Position ID"] = (
+    fg_raw["Position ID"]
+    .astype(str)
+    .str.strip()
+)
+
+fg_final["Position ID"] = (
+    fg_final["Position ID"]
+    .astype(str)
+    .str.strip()
+)
+
+# =====================================================
+# STEP 1 — RAW FG COUNT
+# =====================================================
+
+raw_counts = (
+    fg_raw
+    .groupby("Position ID")
+    .size()
+    .reset_index(name="raw_count")
+)
+
+# =====================================================
+# STEP 2 — ADD ROW NUMBER IN FINAL DATA
+# =====================================================
+
+fg_final["row_num"] = (
+    fg_final
+    .groupby("Position ID")
+    .cumcount() + 1
+)
+
+# =====================================================
+# STEP 3 — JOIN RAW COUNTS
+# =====================================================
+
+fg_final = fg_final.merge(
+    raw_counts,
+    on="Position ID",
+    how="left"
+)
+
+# If Position ID not found in raw
+fg_final["raw_count"] = fg_final["raw_count"].fillna(0)
+
+# =====================================================
+# STEP 4 — DUPLICATE LOGIC
+# =====================================================
+
+fg_final["Duplicate Status"] = fg_final.apply(
+    lambda x:
+        "Excl - duplicate"
+        if x["row_num"] > x["raw_count"]
+        else "Valid",
+    axis=1
+)
+
+# =====================================================
+# WRITE OUTPUT
+# =====================================================
+
+output_dataset.write_with_schema(fg_final)
