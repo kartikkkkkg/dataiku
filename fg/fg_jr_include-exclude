@@ -1,84 +1,78 @@
+import dataiku
 import pandas as pd
 
-# ==========================================
-# CLEAN POSITION ID
-# ==========================================
+# Read datasets
+raw = dataiku.Dataset("fg_raw").get_dataframe()
+joined = dataiku.Dataset("fg_joined").get_dataframe()
 
-fg["Position ID"] = (
-    fg["Position ID"]
-    .astype(str)
-    .str.replace(".0", "", regex=False)
-    .str.strip()
+# Clean Position ID
+raw["Position ID"] = raw["Position ID"].astype(str)
+joined["Position ID"] = joined["Position ID"].astype(str)
+
+# Count Position IDs in original raw
+raw_count = (
+    raw.groupby("Position ID")
+    .size()
+    .reset_index(name="raw_count")
 )
 
-# ==========================================
-# RAW DUPLICATE LOGIC
-# ==========================================
-
-fg["dup_rank"] = (
-    fg.groupby("Position ID")
+# Count Position IDs in joined dataset
+joined["join_rank"] = (
+    joined.groupby("Position ID")
     .cumcount() + 1
 )
 
-# ==========================================
-# FINAL STATUS LOGIC
-# ==========================================
+# Merge raw count
+joined = joined.merge(
+    raw_count,
+    on="Position ID",
+    how="left"
+)
 
+# Keep only rows within original count
+joined = joined[
+    joined["join_rank"] <= joined["raw_count"]
+]
+
+# Duplicate logic
+joined["duplicate_rank"] = (
+    joined.groupby("Position ID")
+    .cumcount() + 1
+)
+
+# Final Status
 def final_status(row):
 
-    # =====================================
-    # 1. MOW / MSW
-    # =====================================
+    # Blank Position ID
+    if pd.isna(row["Position ID"]) or row["Position ID"] == "":
+        return "Excl - Blank Pos ID"
 
-    if str(row.get("Employment Type", "")).strip() in [
+    # MOW/MSW
+    if row["Employment Type"] in [
         "Managed Outcome Worker",
         "Managed Service Worker"
     ]:
         return "Excl - MOW/MSW"
 
-    # =====================================
-    # 2. Blank Position ID
-    # =====================================
-
-    if (
-        pd.isna(row.get("Position ID")) or
-        str(row.get("Position ID")).strip() == ""
-    ):
-        return "Excl - Blank Pos ID"
-
-    # =====================================
-    # 3. RAW DUPLICATES
-    # =====================================
-
-    if row["dup_rank"] > 1:
-        return "Excl - duplicate"
-
-    # =====================================
-    # 4. In New Joiner
-    # =====================================
-
-    if str(row.get("Check in New Joiner", "")).strip() == "In New Joiner":
+    # In NJ
+    if row["Check in NJ"] == "In New Joiner":
         return "Excl - in new joiner"
 
-    # =====================================
-    # 5. In Actuals
-    # =====================================
+    # In Actuals
+    if row["Check In Actuals"] == "In Actuals":
+        return "Excl - in actuals"
 
-    if str(row.get("Check in Actuals", "")).strip() == "In Actuals":
-        return "Excl - in actual"
-
-    # =====================================
-    # 6. DEFAULT
-    # =====================================
+    # Real duplicates
+    if row["duplicate_rank"] > 1:
+        return "Excl - duplicate"
 
     return "Include"
 
+joined["Final Status"] = joined.apply(final_status, axis=1)
 
-# Create final status column
-fg["Final Status"] = fg.apply(final_status, axis=1)
+# Drop helper columns if needed
+# joined = joined.drop(columns=["join_rank", "raw_count", "duplicate_rank"])
 
-# ==========================================
-# DROP HELPER COLUMN
-# ==========================================
-
-fg = fg.drop(columns=["dup_rank"], errors="ignore")
+# Write output
+output = dataiku.Dataset("fg_final")
+output.write_with_schema(joined)
