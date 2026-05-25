@@ -1,0 +1,87 @@
+import dataiku
+import pandas as pd
+from datetime import datetime
+from pandas import ExcelWriter
+
+# =========================================================
+# DYNAMIC DATE
+# =========================================================
+
+today = datetime.today()
+
+date_str = today.strftime("%d%b%y")
+# Example:
+# 25Apr26
+
+file_name = f"T&O_HC_{date_str}.xlsx"
+
+# =========================================================
+# READ DATASETS
+# =========================================================
+
+# Replace dataset names if different in your flow
+
+headcount_df   = dataiku.Dataset("headcount_final").get_dataframe()
+newjoiner_df   = dataiku.Dataset("new_joiner_final").get_dataframe()
+leavers_df     = dataiku.Dataset("leavers_final").get_dataframe()
+jr_df          = dataiku.Dataset("jr_final").get_dataframe()
+fg_df          = dataiku.Dataset("fg_final").get_dataframe()
+transfer_df    = dataiku.Dataset("transfers_final").get_dataframe()
+
+# =========================================================
+# EXPORT TO EXCEL
+# =========================================================
+
+output_path = f"/tmp/{file_name}"
+
+with ExcelWriter(output_path, engine="openpyxl") as writer:
+
+    headcount_df.to_excel(
+        writer,
+        sheet_name="Headcount",
+        index=False
+    )
+
+    newjoiner_df.to_excel(
+        writer,
+        sheet_name="New Joiners",
+        index=False
+    )
+
+    leavers_df.to_excel(
+        writer,
+        sheet_name="Leavers",
+        index=False
+    )
+
+    jr_df.to_excel(
+        writer,
+        sheet_name="JR",
+        index=False
+    )
+
+    fg_df.to_excel(
+        writer,
+        sheet_name="FG",
+        index=False
+    )
+
+    transfer_df.to_excel(
+        writer,
+        sheet_name="Transfers",
+        index=False
+    )
+
+# =========================================================
+# SAVE TO MANAGED FOLDER
+# =========================================================
+
+# Replace with your managed folder ID/name
+folder = dataiku.Folder("FINAL_REPORTS")
+
+with folder.get_writer(file_name) as writer:
+    with open(output_path, "rb") as f:
+        writer.write(f.read())
+
+print("Excel file created successfully:")
+print(file_name)
