@@ -2,30 +2,36 @@
 
 import dataiku
 import pandas as pd
+import numpy as np
 from datetime import datetime
 
 # =========================================================
 # CHANGE INPUT DATASET NAMES HERE
 # =========================================================
 
-HEADCOUNT_DATASET = "CHANGE_HEADCOUNT_DATASET_NAME"
-NEW_JOINER_DATASET = "CHANGE_NEW_JOINER_DATASET_NAME"
-LEAVERS_DATASET = "CHANGE_LEAVERS_DATASET_NAME"
-JR_DATASET = "CHANGE_JR_DATASET_NAME"
-FG_DATASET = "CHANGE_FG_DATASET_NAME"
-TRANSFERS_DATASET = "CHANGE_TRANSFERS_DATASET_NAME"
+HEADCOUNT_DATASET = "MSTR_HC_joined_joineddd_joined_prepared_joined"
+
+NEW_JOINER_DATASET = "NJ_hc_flag_joined_prepared"
+
+LEAVERS_DATASET = "Leavers_HC_Flagged_prepared"
+
+JR_DATASET = "JR_Trf_check_prepared_prepared_prepared_prepared"
+
+FG_DATASET = "fg_clean"
+
+TRANSFERS_DATASET = "transfers_prepared_joined_joined_prepared_prepared_prepared"
 
 # =========================================================
 # CHANGE OUTPUT MANAGED FOLDER NAME HERE
 # =========================================================
 
-OUTPUT_FOLDER = "CHANGE_OUTPUT_FOLDER_NAME"
+OUTPUT_FOLDER = "Central_Reports"
 
 # =========================================================
 # CHANGE OUTPUT DATASET NAME HERE
 # =========================================================
 
-OUTPUT_DATASET = "CHANGE_OUTPUT_DATASET_NAME"
+OUTPUT_DATASET = "Central"
 
 # =========================================================
 # READ INPUT DATASETS
@@ -56,12 +62,84 @@ transfers_df = dataiku.Dataset(
 ).get_dataframe()
 
 # =========================================================
+# REMOVE TIMEZONE ISSUE FOR EXCEL
+# =========================================================
+
+def remove_timezone(df):
+
+    for col in df.columns:
+
+        try:
+
+            if pd.api.types.is_datetime64tz_dtype(df[col]):
+                df[col] = df[col].dt.tz_localize(None)
+
+        except:
+            pass
+
+    return df
+
+headcount_df = remove_timezone(headcount_df)
+
+new_joiner_df = remove_timezone(new_joiner_df)
+
+leavers_df = remove_timezone(leavers_df)
+
+jr_df = remove_timezone(jr_df)
+
+fg_df = remove_timezone(fg_df)
+
+transfers_df = remove_timezone(transfers_df)
+
+# =========================================================
+# POSITION ID CLEANUP
+# REMOVE .0 FROM POSITION IDs
+# =========================================================
+
+def clean_position_id(df):
+
+    for col in df.columns:
+
+        if "Position ID" in col:
+
+            try:
+
+                df[col] = (
+                    pd.to_numeric(df[col], errors="coerce")
+                    .fillna(0)
+                    .astype("Int64")
+                    .astype(str)
+                    .replace("<NA>", "")
+                    .replace("0", "")
+                )
+
+            except:
+                pass
+
+    return df
+
+headcount_df = clean_position_id(headcount_df)
+
+new_joiner_df = clean_position_id(new_joiner_df)
+
+leavers_df = clean_position_id(leavers_df)
+
+jr_df = clean_position_id(jr_df)
+
+fg_df = clean_position_id(fg_df)
+
+transfers_df = clean_position_id(transfers_df)
+
+# =========================================================
 # DYNAMIC FILE NAME
 # =========================================================
 
 today = datetime.today()
 
 date_str = today.strftime("%d%b%y")
+
+# Example:
+# T&O_HC_25May26.xlsx
 
 file_name = f"T&O_HC_{date_str}.xlsx"
 
@@ -140,7 +218,9 @@ with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
 folder = dataiku.Folder(OUTPUT_FOLDER)
 
 with folder.get_writer(file_name) as writer:
+
     with open(output_path, "rb") as f:
+
         writer.write(f.read())
 
 # =========================================================
@@ -148,9 +228,13 @@ with folder.get_writer(file_name) as writer:
 # =========================================================
 
 output_df = pd.DataFrame({
+
     "File_Name": [file_name],
+
     "Created_On": [datetime.now()],
+
     "Status": ["Success"]
+
 })
 
 # =========================================================
@@ -166,8 +250,15 @@ output_dataset.write_with_schema(output_df)
 # =========================================================
 
 print("====================================")
+
 print("Excel File Created Successfully")
+
 print("====================================")
-print(file_name)
-print("Saved to folder:", OUTPUT_FOLDER)
+
+print("File Name :", file_name)
+
+print("Managed Folder :", OUTPUT_FOLDER)
+
+print("Output Dataset :", OUTPUT_DATASET)
+
 print("====================================")
