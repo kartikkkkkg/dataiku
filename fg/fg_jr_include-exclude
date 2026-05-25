@@ -1,78 +1,191 @@
 import dataiku
 import pandas as pd
 
-# Read datasets
+# =========================================================
+# READ DATASETS
+# =========================================================
+
+# Original FG raw dataset
 raw = dataiku.Dataset("fg_raw").get_dataframe()
+
+# Final FG dataset after joins
 joined = dataiku.Dataset("fg_joined").get_dataframe()
 
-# Clean Position ID
-raw["Position ID"] = raw["Position ID"].astype(str)
-joined["Position ID"] = joined["Position ID"].astype(str)
+# =========================================================
+# CLEAN KEY COLUMNS
+# =========================================================
 
-# Count Position IDs in original raw
+key_cols = ["Position ID", "Job Requisition ID"]
+
+for col in key_cols:
+
+    raw[col] = (
+        raw[col]
+        .astype(str)
+        .str.replace(".0", "", regex=False)
+        .str.strip()
+    )
+
+    joined[col] = (
+        joined[col]
+        .astype(str)
+        .str.replace(".0", "", regex=False)
+        .str.strip()
+    )
+
+# =========================================================
+# REMOVE "nan" STRING ISSUES
+# =========================================================
+
+raw["Position ID"] = raw["Position ID"].replace("nan", "")
+joined["Position ID"] = joined["Position ID"].replace("nan", "")
+
+# =========================================================
+# STEP 1 — COUNT ORIGINAL FG RECORDS
+# =========================================================
+# Count Position ID + Job Requisition ID combinations
+# in ORIGINAL FG
+
 raw_count = (
-    raw.groupby("Position ID")
+    raw.groupby(["Position ID", "Job Requisition ID"])
     .size()
     .reset_index(name="raw_count")
 )
 
-# Count Position IDs in joined dataset
-joined["join_rank"] = (
-    joined.groupby("Position ID")
+# =========================================================
+# STEP 2 — CREATE JOIN RANK
+# =========================================================
+# Helps identify fake duplicates created after joins
+
+joined["join_rank"] = 1
+
+mask = (
+    joined["Position ID"].notna() &
+    (joined["Position ID"] != "")
+)
+
+joined.loc[mask, "join_rank"] = (
+    joined[mask]
+    .groupby(["Position ID", "Job Requisition ID"])
     .cumcount() + 1
 )
 
-# Merge raw count
+# =========================================================
+# STEP 3 — MERGE ORIGINAL COUNTS
+# =========================================================
+
 joined = joined.merge(
     raw_count,
-    on="Position ID",
+    on=["Position ID", "Job Requisition ID"],
     how="left"
 )
 
-# Keep only rows within original count
+# If key not found in raw
+joined["raw_count"] = joined["raw_count"].fillna(1)
+
+# =========================================================
+# STEP 4 — REMOVE FAKE DUPLICATES
+# =========================================================
+# Keep only rows that originally existed in FG
+
 joined = joined[
     joined["join_rank"] <= joined["raw_count"]
 ]
 
-# Duplicate logic
-joined["duplicate_rank"] = (
-    joined.groupby("Position ID")
+# =========================================================
+# STEP 5 — REAL DUPLICATE LOGIC
+# =========================================================
+# Among REAL duplicates:
+# keep first
+# mark remaining as duplicate
+
+joined["duplicate_rank"] = 1
+
+mask = (
+    joined["Position ID"].notna() &
+    (joined["Position ID"] != "")
+)
+
+joined.loc[mask, "duplicate_rank"] = (
+    joined[mask]
+    .groupby(["Position ID", "Job Requisition ID"])
     .cumcount() + 1
 )
 
-# Final Status
+# =========================================================
+# STEP 6 — FINAL INCLUDE / EXCLUDE LOGIC
+# =========================================================
+
 def final_status(row):
 
+    # -----------------------------------------------------
     # Blank Position ID
-    if pd.isna(row["Position ID"]) or row["Position ID"] == "":
+    # -----------------------------------------------------
+
+    if (
+        pd.isna(row["Position ID"]) or
+        str(row["Position ID"]).strip() == "" or
+        str(row["Position ID"]).strip().lower() == "nan"
+    ):
         return "Excl - Blank Pos ID"
 
-    # MOW/MSW
-    if row["Employment Type"] in [
+    # -----------------------------------------------------
+    # MOW / MSW
+    # -----------------------------------------------------
+
+    if str(row.get("Employment Type", "")).strip() in [
         "Managed Outcome Worker",
         "Managed Service Worker"
     ]:
         return "Excl - MOW/MSW"
 
-    # In NJ
-    if row["Check in NJ"] == "In New Joiner":
+    # -----------------------------------------------------
+    # In New Joiner
+    # -----------------------------------------------------
+
+    if str(row.get("Check in NJ", "")).strip() == "In New Joiner":
         return "Excl - in new joiner"
 
+    # -----------------------------------------------------
     # In Actuals
-    if row["Check In Actuals"] == "In Actuals":
+    # -----------------------------------------------------
+
+    if str(row.get("Check In Actuals", "")).strip() == "In Actuals":
         return "Excl - in actuals"
 
-    # Real duplicates
+    # -----------------------------------------------------
+    # REAL DUPLICATES
+    # -----------------------------------------------------
+
     if row["duplicate_rank"] > 1:
         return "Excl - duplicate"
 
+    # -----------------------------------------------------
+    # DEFAULT
+    # -----------------------------------------------------
+
     return "Include"
 
+# Apply logic
 joined["Final Status"] = joined.apply(final_status, axis=1)
 
-# Drop helper columns if needed
-# joined = joined.drop(columns=["join_rank", "raw_count", "duplicate_rank"])
+# =========================================================
+# CLEANUP HELPER COLUMNS
+# =========================================================
 
-# Write output
+joined = joined.drop(
+    columns=[
+        "join_rank",
+        "raw_count",
+        "duplicate_rank"
+    ],
+    errors="ignore"
+)
+
+# =========================================================
+# WRITE OUTPUT
+# =========================================================
+
 output = dataiku.Dataset("fg_final")
+
 output.write_with_schema(joined)
