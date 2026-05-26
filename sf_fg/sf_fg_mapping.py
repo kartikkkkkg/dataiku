@@ -2,7 +2,7 @@ import pandas as pd
 import dataiku
 
 # ============================================
-# READ DATASETS
+# READ INPUT DATASETS
 # ============================================
 
 sf = dataiku.Dataset(
@@ -51,9 +51,13 @@ fg = fg[
 # DISTINCT POSITION IDS
 # ============================================
 
-sf = sf.drop_duplicates(subset=["Position_ID"])
+sf = sf.drop_duplicates(
+    subset=["Position_ID"]
+)
 
-fg = fg.drop_duplicates(subset=["Position_ID"])
+fg = fg.drop_duplicates(
+    subset=["Position_ID"]
+)
 
 # ============================================
 # FG LOGIC
@@ -99,12 +103,13 @@ merged = pd.merge(
 
 # ============================================
 # FINAL LOGIC
-# FG HAS PRIORITY
 # ============================================
 
 def final_reason(row):
 
-    fg_reason = row.get("Reason for Hire from FG")
+    fg_reason = row.get(
+        "Reason for Hire from FG"
+    )
 
     if pd.notna(fg_reason):
 
@@ -113,7 +118,11 @@ def final_reason(row):
 
         return "New Hire"
 
-    if row.get("Reason for Hire From SF") == "Replacement":
+    sf_reason = row.get(
+        "Reason for Hire From SF"
+    )
+
+    if sf_reason == "Replacement":
         return "Replacement"
 
     return "New Hire"
@@ -127,7 +136,9 @@ merged["Final Reason for Hire"] = merged.apply(
 # FINAL OUTPUT
 # ============================================
 
-merged["Position Code"] = merged["Position_ID"]
+merged["Position Code"] = merged[
+    "Position_ID"
+]
 
 final_df = merged[[
     "Position Code",
@@ -150,7 +161,7 @@ final_df["Position Code"] = (
 )
 
 # ============================================
-# WRITE EXCEL TO SHAREPOINT FOLDER
+# CREATE EXCEL FILE
 # ============================================
 
 output_path = "/tmp/SF_FG.xlsx"
@@ -166,9 +177,17 @@ with pd.ExcelWriter(
         index=False
     )
 
-folder = dataiku.Folder("Output")
+# ============================================
+# WRITE TO SHAREPOINT FOLDER
+# ============================================
 
-with folder.get_writer("SF_FG.xlsx") as writer:
+folder = dataiku.Folder(
+    "SF_FG_Mapping"
+)
+
+with folder.get_writer(
+    "SF_FG.xlsx"
+) as writer:
 
     with open(output_path, "rb") as f:
 
