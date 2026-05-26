@@ -1,17 +1,14 @@
 import pandas as pd
 import dataiku
+from io import BytesIO
 
 # ============================================
-# READ INPUT DATASETS
+# READ DATASETS
 # ============================================
 
-sf = dataiku.Dataset(
-    "Position_Download_report"
-).get_dataframe()
+sf = dataiku.Dataset("Position_Download_report").get_dataframe()
 
-fg = dataiku.Dataset(
-    "FG_JR_Prepared"
-).get_dataframe()
+fg = dataiku.Dataset("FG_JR_Prepared").get_dataframe()
 
 # ============================================
 # CLEAN POSITION IDS
@@ -32,7 +29,7 @@ fg["Position_ID"] = (
 )
 
 # ============================================
-# REMOVE BLANK POSITION IDS
+# REMOVE BLANK IDS
 # ============================================
 
 sf = sf[
@@ -46,18 +43,6 @@ fg = fg[
     (fg["Position_ID"] != "") &
     (fg["Position_ID"].str.lower() != "nan")
 ]
-
-# ============================================
-# DISTINCT POSITION IDS
-# ============================================
-
-sf = sf.drop_duplicates(
-    subset=["Position_ID"]
-)
-
-fg = fg.drop_duplicates(
-    subset=["Position_ID"]
-)
 
 # ============================================
 # FG LOGIC
@@ -91,7 +76,29 @@ sf["Reason for Hire From SF"] = sf[
 ].apply(normalize_sf)
 
 # ============================================
-# MERGE
+# KEEP ONLY REQUIRED COLUMNS
+# ============================================
+
+sf = sf[[
+    "Position_ID",
+    "Reason for Hire From SF"
+]]
+
+fg = fg[[
+    "Position_ID",
+    "Reason for Hire from FG"
+]]
+
+# ============================================
+# REMOVE DUPLICATES BEFORE MERGE
+# ============================================
+
+sf = sf.drop_duplicates(subset=["Position_ID"])
+
+fg = fg.drop_duplicates(subset=["Position_ID"])
+
+# ============================================
+# FULL OUTER JOIN
 # ============================================
 
 merged = pd.merge(
@@ -103,13 +110,12 @@ merged = pd.merge(
 
 # ============================================
 # FINAL LOGIC
+# FG PRIORITY
 # ============================================
 
 def final_reason(row):
 
-    fg_reason = row.get(
-        "Reason for Hire from FG"
-    )
+    fg_reason = row.get("Reason for Hire from FG")
 
     if pd.notna(fg_reason):
 
@@ -118,9 +124,7 @@ def final_reason(row):
 
         return "New Hire"
 
-    sf_reason = row.get(
-        "Reason for Hire From SF"
-    )
+    sf_reason = row.get("Reason for Hire From SF")
 
     if sf_reason == "Replacement":
         return "Replacement"
@@ -136,9 +140,7 @@ merged["Final Reason for Hire"] = merged.apply(
 # FINAL OUTPUT
 # ============================================
 
-merged["Position Code"] = merged[
-    "Position_ID"
-]
+merged["Position Code"] = merged["Position_ID"]
 
 final_df = merged[[
     "Position Code",
@@ -147,50 +149,46 @@ final_df = merged[[
     "Final Reason for Hire"
 ]]
 
+# ============================================
+# FINAL DISTINCT
+# ============================================
+
+final_df = final_df.sort_values(
+    by="Final Reason for Hire",
+    ascending=False
+)
+
 final_df = final_df.drop_duplicates(
     subset=["Position Code"]
 )
 
-final_df["Position Code"] = (
-    pd.to_numeric(
-        final_df["Position Code"],
-        errors="coerce"
-    )
-    .astype("Int64")
-    .astype(str)
-)
-
 # ============================================
-# CREATE EXCEL FILE
+# CREATE EXCEL IN MEMORY
 # ============================================
 
-output_path = "/tmp/SF_FG.xlsx"
+excel_buffer = BytesIO()
 
 with pd.ExcelWriter(
-    output_path,
+    excel_buffer,
     engine="openpyxl"
 ) as writer:
 
     final_df.to_excel(
         writer,
-        sheet_name="SF_FG_Mapping",
+        sheet_name="SF_FG_Mapped",
         index=False
     )
 
+excel_buffer.seek(0)
+
 # ============================================
-# WRITE TO SHAREPOINT FOLDER
+# SAVE TO SHAREPOINT FOLDER
 # ============================================
 
-folder = dataiku.Folder(
-    "SF_FG_Mapping"
-)
+output_folder = dataiku.Folder("SF_FG_Mapping")
 
-with folder.get_writer(
-    "SF_FG.xlsx"
-) as writer:
+with output_folder.get_writer("SF_FG.xlsx") as writer:
 
-    with open(output_path, "rb") as f:
+    writer.write(excel_buffer.read())
 
-        writer.write(f.read())
-
-print("SF_FG.xlsx uploaded successfully")
+print("SF_FG.xlsx overwritten successfully in SharePoint")
