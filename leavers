@@ -1,0 +1,78 @@
+import dataiku
+import pandas as pd
+import numpy as np
+
+# ==========================================
+# READ DATASETS
+# ==========================================
+
+Leavers_prepared = dataiku.Dataset(
+    "leavers_prepared_joined_joined_joined_prepared_joined_prepared"
+)
+
+HC_Joined = dataiku.Dataset(
+    "MSTR_HC_joined_joineddd_joined_prepared_joined"
+)
+
+Leavers_prepared_df = Leavers_prepared.get_dataframe()
+HC_Joined_df = HC_Joined.get_dataframe()
+
+# ==========================================
+# STANDARDIZE BANK ID
+# ==========================================
+
+def clean_bank_id(x):
+
+    if pd.isna(x):
+        return ""
+
+    x = str(x).strip()
+
+    if x.endswith(".0"):
+        x = x[:-2]
+
+    return x
+
+Leavers_prepared_df["Bank ID"] = (
+    Leavers_prepared_df["Bank ID"]
+    .apply(clean_bank_id)
+)
+
+HC_Joined_df["Bank ID"] = (
+    HC_Joined_df["Bank ID"]
+    .apply(clean_bank_id)
+)
+
+# ==========================================
+# CREATE LOOKUP SET
+# ==========================================
+
+hc_bank_ids = set(
+    HC_Joined_df["Bank ID"]
+)
+
+# ==========================================
+# CREATE HC FLAG
+# ==========================================
+
+Leavers_prepared_df["Check in Actuals"] = (
+    Leavers_prepared_df["Bank ID"]
+    .apply(
+        lambda x:
+        "in actuals"
+        if x in hc_bank_ids
+        else "not in actuals"
+    )
+)
+
+# ==========================================
+# WRITE OUTPUT
+# ==========================================
+
+output_dataset = dataiku.Dataset(
+    "Leavers_HC_Flagged"
+)
+
+output_dataset.write_with_schema(
+    Leavers_prepared_df
+)
