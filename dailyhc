@@ -1,8 +1,3 @@
-The KeyError: 'MT_CC' you are encountering is a known compatibility issue caused by the older version of Python and Pandas running on your Dataiku server (Python 3.6, as seen in your logs) compared to your local machine (Python 3.8+).
-In older Pandas versions, the "named aggregation" syntax you used locally—like agg(Total_FTE=("FTE", "sum"))—is not supported. Instead of throwing a clear SyntaxError, it misinterprets the command and strips columns out of the DataFrame, leading to a phantom KeyError on valid columns like MT_CC.
-To fix this permanently, the aggregations have been rewritten into dictionary syntax (agg({"FTE": "sum"})) which is 100% compatible with Dataiku's environment. Explicit column definitions have also been enforced when creating DataFrames to guarantee the schema never drops MT_CC.
-Replace your entire Python Recipe with this corrected code:
-```python
 # -*- coding: utf-8 -*-
 import os
 import calendar
@@ -253,7 +248,6 @@ def build_comments_for_controllable(movements: pd.DataFrame) -> pd.DataFrame:
 
     grp_cols = ["MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement"]
     
-    # Python 3.6 Dataiku Compatibility Fix: Removed Named Aggregation
     totals = df.groupby(grp_cols, as_index=False).agg({
         "FTE": "sum",
         "AW_FTE": "sum",
@@ -322,7 +316,6 @@ def build_hc_summary_controllable(
 
     cols = [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
 
-    # Python 3.6 Dataiku Compatibility Fix: Removed Named Aggregation
     if curr_c.empty:
         curr_sum = pd.DataFrame(columns=cols + ["HC_Current"])
     else:
@@ -654,22 +647,46 @@ def main():
     os.remove(temp_path)
     
     # ---------------------------------------------------------
-    # PASS HTML TABLE TO SCENARIO VARIABLES
+    # SEND HTML EMAIL DIRECTLY FROM RECIPE
     # ---------------------------------------------------------
     print("Generating HTML Email Table...")
     html_table = build_html_table_from_summary(merged_with_totals, curr_label, last_label)
     
     client = dataiku.api_client()
     project = client.get_default_project()
-    variables = project.get_variables()
     
-    variables["standard"]["HTML_EMAIL_TABLE"] = html_table
-    variables["standard"]["REPORT_DATE"] = curr_label
-    project.set_variables(variables)
+    # Email Configuration
+    EMAIL_TO = "sample.email@example.com"
+    SUBJECT = f"Daily Headcount | {curr_label}"
+    
+    body_html = f"""
+    <p>Hi all,<br>
+    PFB Headcount as of {curr_label}</p>
+    {html_table}
+    """
+    
+    print("Sending email directly from Python...")
+    try:
+        sender = project.get_message_sender("mail")
+        sender.send(
+            sender=EMAIL_TO,
+            recipient=EMAIL_TO,
+            subject=SUBJECT,
+            message=body_html
+        )
+        print("Mail sent successfully via 'mail' channel.")
+    except Exception as e:
+        print(f"Primary channel failed: {e}. Trying backup channel...")
+        sender = project.get_message_sender("fdmi-smtp")
+        sender.send(
+            sender=EMAIL_TO,
+            recipient=EMAIL_TO,
+            subject=SUBJECT,
+            message=body_html
+        )
+        print("Mail sent successfully via 'fdmi-smtp' channel.")
 
-    print("Process Complete. HTML table passed to project variables for Email Scenario.")
+    print("Process Complete!")
 
 if __name__ == "__main__":
     main()
-
-```
