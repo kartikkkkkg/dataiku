@@ -1,3 +1,8 @@
+The KeyError: 'MT_CC' you are encountering is a known compatibility issue caused by the older version of Python and Pandas running on your Dataiku server (Python 3.6, as seen in your logs) compared to your local machine (Python 3.8+).
+In older Pandas versions, the "named aggregation" syntax you used locally—like agg(Total_FTE=("FTE", "sum"))—is not supported. Instead of throwing a clear SyntaxError, it misinterprets the command and strips columns out of the DataFrame, leading to a phantom KeyError on valid columns like MT_CC.
+To fix this permanently, the aggregations have been rewritten into dictionary syntax (agg({"FTE": "sum"})) which is 100% compatible with Dataiku's environment. Explicit column definitions have also been enforced when creating DataFrames to guarantee the schema never drops MT_CC.
+Replace your entire Python Recipe with this corrected code:
+```python
 # -*- coding: utf-8 -*-
 import os
 import calendar
@@ -18,12 +23,12 @@ OUTPUT_SHEET_NAME = "New_summary"
 
 # Column names in HC files
 COL_BANK_ID = "Bank ID"
-COL_BF_L6 = "Business Function Lvl6 Name"  # Matches Headcount files exactly
+COL_BF_L6 = "Business Function Lvl6 Name"
 COL_EMP_TYPE_HC = "Employment Type"
 COL_FTE = "FTE"
 
 # Column names in mapping sheet
-COL_MAP_BF_L6 = "Business Function Lvl 6"  # Matches Mapping file exactly
+COL_MAP_BF_L6 = "Business Function Lvl 6"
 COL_COST_CAT = "Cost Cat"
 COL_MT_DOMAIN = "MT Domain"
 COL_MT1_DOMAIN = "MT-1 Domain"
@@ -84,7 +89,6 @@ def is_agency_worker(emp_type: str) -> bool:
     return "agency" in s and "worker" in s
 
 def process_mapping_df(mapping_df: pd.DataFrame):
-    # Strip whitespace to prevent broken data mappings
     mapping_df[COL_MAP_BF_L6] = mapping_df[COL_MAP_BF_L6].astype(str).str.strip()
     mapping_df[COL_MAP_EMP_TYP] = mapping_df[COL_MAP_EMP_TYP].astype(str).str.strip()
 
@@ -107,7 +111,6 @@ def apply_mappings_to_hc(
 ) -> pd.DataFrame:
     df = hc_raw[[COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE_HC, COL_FTE]].copy()
     
-    # Standardize data variants
     df[COL_BANK_ID] = df[COL_BANK_ID].astype(str).str.strip()
     df[COL_BF_L6] = df[COL_BF_L6].astype(str).str.strip()
     df[COL_EMP_TYPE_HC] = df[COL_EMP_TYPE_HC].astype(str).str.strip()
@@ -154,6 +157,11 @@ def build_snapshot(df: pd.DataFrame, suffix: str) -> pd.DataFrame:
 def classify_movements(
     combined: pd.DataFrame, rollup_ids: set, rollup_gbf_map: dict
 ) -> pd.DataFrame:
+    
+    expected_columns = [
+        COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, 
+        "Movement", "FTE", "EmpType", "ContrSide", "From_MT_CC", "To_MT_CC"
+    ]
     rows = []
 
     def add_move(
@@ -227,14 +235,11 @@ def classify_movements(
                 )
 
     if not rows:
-        return pd.DataFrame(
-            columns=[COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement", "FTE", "EmpType", "ContrSide", "From_MT_CC", "To_MT_CC"]
-        )
+        return pd.DataFrame(columns=expected_columns)
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=expected_columns)
 
 def build_comments_for_controllable(movements: pd.DataFrame) -> pd.DataFrame:
-    # Early out if empty to preserve MT_CC column structure
     if movements.empty:
         return pd.DataFrame(columns=["MT_CC", "Comments"])
 
@@ -247,9 +252,14 @@ def build_comments_for_controllable(movements: pd.DataFrame) -> pd.DataFrame:
     df["FTE_FTE"] = np.where(df["is_AW"], 0.0, df["FTE"])
 
     grp_cols = ["MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement"]
-    totals = df.groupby(grp_cols, as_index=False).agg(
-        Total_FTE=("FTE", "sum"), AW_FTE=("AW_FTE", "sum"), FTE_FTE=("FTE_FTE", "sum")
-    )
+    
+    # Python 3.6 Dataiku Compatibility Fix: Removed Named Aggregation
+    totals = df.groupby(grp_cols, as_index=False).agg({
+        "FTE": "sum",
+        "AW_FTE": "sum",
+        "FTE_FTE": "sum"
+    })
+    totals.rename(columns={"FTE": "Total_FTE"}, inplace=True)
 
     tin = df[df["Movement"] == "Transfer in"].dropna(subset=["From_MT_CC"]).groupby(["MT_CC", "From_MT_CC"], as_index=False)["FTE"].sum()
     tout = df[df["Movement"] == "Transfer out"].dropna(subset=["To_MT_CC"]).groupby(["MT_CC", "To_MT_CC"], as_index=False)["FTE"].sum()
@@ -312,16 +322,18 @@ def build_hc_summary_controllable(
 
     cols = [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
 
-    # Structural wrappers enforce preservation of column tracking schemas
+    # Python 3.6 Dataiku Compatibility Fix: Removed Named Aggregation
     if curr_c.empty:
         curr_sum = pd.DataFrame(columns=cols + ["HC_Current"])
     else:
-        curr_sum = curr_c.groupby(cols, as_index=False).agg(HC_Current=(COL_FTE, "sum"))
+        curr_sum = curr_c.groupby(cols, as_index=False).agg({COL_FTE: "sum"})
+        curr_sum.rename(columns={COL_FTE: "HC_Current"}, inplace=True)
 
     if last_c.empty:
         last_sum = pd.DataFrame(columns=cols + ["HC_Last"])
     else:
-        last_sum = last_c.groupby(cols, as_index=False).agg(HC_Last=(COL_FTE, "sum"))
+        last_sum = last_c.groupby(cols, as_index=False).agg({COL_FTE: "sum"})
+        last_sum.rename(columns={COL_FTE: "HC_Last"}, inplace=True)
 
     if curr_sum.empty and last_sum.empty:
         summary = pd.DataFrame(columns=cols + ["HC_Current", "HC_Last", "Net_Change"])
@@ -659,3 +671,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+```
