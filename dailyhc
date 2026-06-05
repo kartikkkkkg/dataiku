@@ -1,7 +1,3 @@
-Here is the fully updated Python Recipe code.
-I have updated the constants at the top so that COL_BF_L6 targets "Business Function Lvl6 Name" (for the raw HC files) and COL_MAP_BF_L6 targets "Business Function Lvl 6" (for the mapping file). The pd.merge() logic naturally handles differing left/right column names, so this single change fixes the discrepancy seamlessly.
-Copy and replace your entire Dataiku Python Recipe with this:
-```python
 # -*- coding: utf-8 -*-
 import os
 import calendar
@@ -22,12 +18,12 @@ OUTPUT_SHEET_NAME = "New_summary"
 
 # Column names in HC files
 COL_BANK_ID = "Bank ID"
-COL_BF_L6 = "Business Function Lvl6 Name"  # <-- UPDATED: Matches Headcount files
+COL_BF_L6 = "Business Function Lvl6 Name"  # Matches Headcount files exactly
 COL_EMP_TYPE_HC = "Employment Type"
 COL_FTE = "FTE"
 
 # Column names in mapping sheet
-COL_MAP_BF_L6 = "Business Function Lvl 6"  # <-- Matches Mapping file
+COL_MAP_BF_L6 = "Business Function Lvl 6"  # Matches Mapping file exactly
 COL_COST_CAT = "Cost Cat"
 COL_MT_DOMAIN = "MT Domain"
 COL_MT1_DOMAIN = "MT-1 Domain"
@@ -88,6 +84,10 @@ def is_agency_worker(emp_type: str) -> bool:
     return "agency" in s and "worker" in s
 
 def process_mapping_df(mapping_df: pd.DataFrame):
+    # Strip spaces to prevent failed joins
+    mapping_df[COL_MAP_BF_L6] = mapping_df[COL_MAP_BF_L6].astype(str).str.strip()
+    mapping_df[COL_MAP_EMP_TYP] = mapping_df[COL_MAP_EMP_TYP].astype(str).str.strip()
+
     bf_map = mapping_df[
         [COL_MAP_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN]
     ].drop_duplicates()
@@ -106,7 +106,11 @@ def apply_mappings_to_hc(
     hc_raw: pd.DataFrame, bf_map: pd.DataFrame, emp_map: pd.DataFrame
 ) -> pd.DataFrame:
     df = hc_raw[[COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE_HC, COL_FTE]].copy()
+    
+    # Strip spaces to ensure perfect matching
     df[COL_BANK_ID] = df[COL_BANK_ID].astype(str).str.strip()
+    df[COL_BF_L6] = df[COL_BF_L6].astype(str).str.strip()
+    df[COL_EMP_TYPE_HC] = df[COL_EMP_TYPE_HC].astype(str).str.strip()
 
     df = df.merge(
         bf_map,
@@ -241,11 +245,15 @@ def build_comments_for_controllable(movements: pd.DataFrame) -> pd.DataFrame:
     df["AW_FTE"] = np.where(df["is_AW"], df["FTE"], 0.0)
     df["FTE_FTE"] = np.where(df["is_AW"], 0.0, df["FTE"])
 
-    totals = df.groupby(
-        ["MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement"], as_index=False
-    ).agg(
-        Total_FTE=("FTE", "sum"), AW_FTE=("AW_FTE", "sum"), FTE_FTE=("FTE_FTE", "sum")
-    )
+    grp_cols = ["MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement"]
+    
+    # Safety wrapper for older pandas groupbys
+    if df.empty:
+        totals = pd.DataFrame(columns=grp_cols + ["Total_FTE", "AW_FTE", "FTE_FTE"])
+    else:
+        totals = df.groupby(grp_cols, as_index=False).agg(
+            Total_FTE=("FTE", "sum"), AW_FTE=("AW_FTE", "sum"), FTE_FTE=("FTE_FTE", "sum")
+        )
 
     tin = df[df["Movement"] == "Transfer in"].dropna(subset=["From_MT_CC"]).groupby(["MT_CC", "From_MT_CC"], as_index=False)["FTE"].sum()
     tout = df[df["Movement"] == "Transfer out"].dropna(subset=["To_MT_CC"]).groupby(["MT_CC", "To_MT_CC"], as_index=False)["FTE"].sum()
@@ -292,6 +300,9 @@ def build_comments_for_controllable(movements: pd.DataFrame) -> pd.DataFrame:
 
         rows.append({"MT_CC": mt_cc, "Comments": "\n".join(lines)})
 
+    if not rows:
+        return pd.DataFrame(columns=["MT_CC", "Comments"])
+
     return pd.DataFrame(rows)
 
 # ==========================================
@@ -305,10 +316,23 @@ def build_hc_summary_controllable(
 
     cols = [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
 
-    curr_sum = curr_c.groupby(cols, as_index=False).agg(HC_Current=(COL_FTE, "sum"))
-    last_sum = last_c.groupby(cols, as_index=False).agg(HC_Last=(COL_FTE, "sum"))
+    # Explicit empty checks guarantee columns are never dropped by pandas
+    if curr_c.empty:
+        curr_sum = pd.DataFrame(columns=cols + ["HC_Current"])
+    else:
+        curr_sum = curr_c.groupby(cols, as_index=False).agg(HC_Current=(COL_FTE, "sum"))
 
-    summary = curr_sum.merge(last_sum, on=cols, how="outer")
+    if last_c.empty:
+        last_sum = pd.DataFrame(columns=cols + ["HC_Last"])
+    else:
+        last_sum = last_c.groupby(cols, as_index=False).agg(HC_Last=(COL_FTE, "sum"))
+
+    if curr_sum.empty and last_sum.empty:
+        summary = pd.DataFrame(columns=cols + ["HC_Current", "HC_Last", "Net_Change"])
+        return summary
+    else:
+        summary = curr_sum.merge(last_sum, on=cols, how="outer")
+
     summary["HC_Current"] = summary["HC_Current"].fillna(0.0)
     summary["HC_Last"] = summary["HC_Last"].fillna(0.0)
     summary["Net_Change"] = summary["HC_Current"] - summary["HC_Last"]
@@ -348,8 +372,8 @@ def add_totals_rows(
             )
         )
 
-    total_curr = int(df[curr_col].sum())
-    total_last = int(df[last_col].sum())
+    total_curr = int(df[curr_col].sum()) if not df.empty else 0
+    total_last = int(df[last_col].sum()) if not df.empty else 0
     total_net = total_curr - total_last
     grand = pd.DataFrame(
         [{COL_COST_CAT: GRAND_TOTAL_LABEL, COL_MT_DOMAIN: "", curr_col: total_curr, last_col: total_last, net_col: total_net, "Comments": ""}]
@@ -519,7 +543,7 @@ def main():
     lastmonth_rollup_df = dataiku.Dataset("lastmonth_rollup").get_dataframe()
     
     # Initialize Output Folder exactly as shown in screenshot
-    HC_Output_Reports = dataiku.Folder("SatdiEQ1")
+    HC_Output_Reports = dataiku.Folder("SatdiEQI")
 
     print("Processing mappings...")
     bf_map, emp_map = process_mapping_df(mapping_df)
@@ -632,4 +656,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
