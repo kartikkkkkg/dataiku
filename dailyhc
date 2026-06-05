@@ -1,8 +1,6 @@
-This screenshot is incredibly helpful! It shows that your inputs (daily_hc, dailyrollup, lastmonth_hc, mapping, lastmonth_rollup) are configured as **Dataiku Datasets** (indicated by the table grid icon), not Managed Folders.
-This actually makes the code much cleaner. Because Dataiku has already read the Excel files and converted them into Datasets, we no longer need the pd.read_excel() functions or any folder downloading logic. We simply use .get_dataframe() just like your screenshot shows.
-Here is the fully adapted, complete Python Recipe code tailored exactly to the architecture shown in your screenshot.
-### Python Recipe Code (Full & Unabridged)
-Copy and paste this into your Dataiku Python Recipe.
+Here is the fully updated Python Recipe code.
+I have updated the constants at the top so that COL_BF_L6 targets "Business Function Lvl6 Name" (for the raw HC files) and COL_MAP_BF_L6 targets "Business Function Lvl 6" (for the mapping file). The pd.merge() logic naturally handles differing left/right column names, so this single change fixes the discrepancy seamlessly.
+Copy and replace your entire Dataiku Python Recipe with this:
 ```python
 # -*- coding: utf-8 -*-
 import os
@@ -24,12 +22,12 @@ OUTPUT_SHEET_NAME = "New_summary"
 
 # Column names in HC files
 COL_BANK_ID = "Bank ID"
-COL_BF_L6 = "Business Function Lvl 6"
+COL_BF_L6 = "Business Function Lvl6 Name"  # <-- UPDATED: Matches Headcount files
 COL_EMP_TYPE_HC = "Employment Type"
 COL_FTE = "FTE"
 
 # Column names in mapping sheet
-COL_MAP_BF_L6 = "Business Function Lvl 6"
+COL_MAP_BF_L6 = "Business Function Lvl 6"  # <-- Matches Mapping file
 COL_COST_CAT = "Cost Cat"
 COL_MT_DOMAIN = "MT Domain"
 COL_MT1_DOMAIN = "MT-1 Domain"
@@ -99,7 +97,6 @@ def process_mapping_df(mapping_df: pd.DataFrame):
     return bf_map, emp_map
 
 def process_rollup_df(rollup_df: pd.DataFrame) -> pd.DataFrame:
-    # Mimics usecols=[2, 16] from original read_excel
     rollup = rollup_df.iloc[:, [2, 16]].copy()
     rollup.columns = [COL_ROLLUP_ID, COL_ROLLUP_GBF]
     rollup[COL_ROLLUP_ID] = rollup[COL_ROLLUP_ID].astype(str).str.strip()
@@ -603,7 +600,7 @@ def main():
     # ---------------------------------------------------------
     file_label = curr_label.replace("-", "")
     filename = f"HC_{file_label}.xlsx"
-    temp_path = f"/tmp/{filename}" # Save to Dataiku temporary OS space first
+    temp_path = f"/tmp/{filename}"
 
     print(f"Writing temporary Excel file to {temp_path}...")
     merged_with_totals.to_excel(temp_path, sheet_name=OUTPUT_SHEET_NAME, index=False)
@@ -615,7 +612,6 @@ def main():
     with open(temp_path, "rb") as f:
         HC_Output_Reports.upload_stream(filename, f)
         
-    # Clean up temp file
     os.remove(temp_path)
     
     # ---------------------------------------------------------
@@ -628,7 +624,6 @@ def main():
     project = client.get_default_project()
     variables = project.get_variables()
     
-    # These variables will be consumed by the Scenario step to send the email
     variables["standard"]["HTML_EMAIL_TABLE"] = html_table
     variables["standard"]["REPORT_DATE"] = curr_label
     project.set_variables(variables)
@@ -638,4 +633,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-```
