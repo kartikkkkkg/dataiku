@@ -84,7 +84,7 @@ def is_agency_worker(emp_type: str) -> bool:
     return "agency" in s and "worker" in s
 
 def process_mapping_df(mapping_df: pd.DataFrame):
-    # Strip spaces to prevent failed joins
+    # Strip whitespace to prevent broken data mappings
     mapping_df[COL_MAP_BF_L6] = mapping_df[COL_MAP_BF_L6].astype(str).str.strip()
     mapping_df[COL_MAP_EMP_TYP] = mapping_df[COL_MAP_EMP_TYP].astype(str).str.strip()
 
@@ -107,7 +107,7 @@ def apply_mappings_to_hc(
 ) -> pd.DataFrame:
     df = hc_raw[[COL_BANK_ID, COL_BF_L6, COL_EMP_TYPE_HC, COL_FTE]].copy()
     
-    # Strip spaces to ensure perfect matching
+    # Standardize data variants
     df[COL_BANK_ID] = df[COL_BANK_ID].astype(str).str.strip()
     df[COL_BF_L6] = df[COL_BF_L6].astype(str).str.strip()
     df[COL_EMP_TYPE_HC] = df[COL_EMP_TYPE_HC].astype(str).str.strip()
@@ -234,6 +234,7 @@ def classify_movements(
     return pd.DataFrame(rows)
 
 def build_comments_for_controllable(movements: pd.DataFrame) -> pd.DataFrame:
+    # Early out if empty to preserve MT_CC column structure
     if movements.empty:
         return pd.DataFrame(columns=["MT_CC", "Comments"])
 
@@ -246,14 +247,9 @@ def build_comments_for_controllable(movements: pd.DataFrame) -> pd.DataFrame:
     df["FTE_FTE"] = np.where(df["is_AW"], 0.0, df["FTE"])
 
     grp_cols = ["MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement"]
-    
-    # Safety wrapper for older pandas groupbys
-    if df.empty:
-        totals = pd.DataFrame(columns=grp_cols + ["Total_FTE", "AW_FTE", "FTE_FTE"])
-    else:
-        totals = df.groupby(grp_cols, as_index=False).agg(
-            Total_FTE=("FTE", "sum"), AW_FTE=("AW_FTE", "sum"), FTE_FTE=("FTE_FTE", "sum")
-        )
+    totals = df.groupby(grp_cols, as_index=False).agg(
+        Total_FTE=("FTE", "sum"), AW_FTE=("AW_FTE", "sum"), FTE_FTE=("FTE_FTE", "sum")
+    )
 
     tin = df[df["Movement"] == "Transfer in"].dropna(subset=["From_MT_CC"]).groupby(["MT_CC", "From_MT_CC"], as_index=False)["FTE"].sum()
     tout = df[df["Movement"] == "Transfer out"].dropna(subset=["To_MT_CC"]).groupby(["MT_CC", "To_MT_CC"], as_index=False)["FTE"].sum()
@@ -316,7 +312,7 @@ def build_hc_summary_controllable(
 
     cols = [COL_COST_CAT, COL_MT_DOMAIN, "MT_CC"]
 
-    # Explicit empty checks guarantee columns are never dropped by pandas
+    # Structural wrappers enforce preservation of column tracking schemas
     if curr_c.empty:
         curr_sum = pd.DataFrame(columns=cols + ["HC_Current"])
     else:
@@ -344,6 +340,8 @@ def build_hc_summary_controllable(
     return summary
 
 def sort_cost_cat_mt(summary: pd.DataFrame) -> pd.DataFrame:
+    if summary.empty:
+        return summary
     cat_type = pd.CategoricalDtype(COST_CAT_ORDER, ordered=True)
     out = summary.copy()
     out[COL_COST_CAT] = out[COL_COST_CAT].astype(str)
@@ -357,6 +355,8 @@ def add_totals_rows(
 ) -> pd.DataFrame:
     pieces = []
     for cat in COST_CAT_ORDER:
+        if df.empty:
+            continue
         block = df[df[COL_COST_CAT] == cat]
         if block.empty:
             continue
@@ -542,7 +542,7 @@ def main():
     mapping_df = dataiku.Dataset("mapping").get_dataframe()
     lastmonth_rollup_df = dataiku.Dataset("lastmonth_rollup").get_dataframe()
     
-    # Initialize Output Folder exactly as shown in screenshot
+    # Target folder matching flow schema precisely
     HC_Output_Reports = dataiku.Folder("SatdiEQI")
 
     print("Processing mappings...")
@@ -592,11 +592,14 @@ def main():
     hc_summary = build_hc_summary_controllable(hc_curr, hc_last)
 
     print("Merging summary with comments...")
-    merged = hc_summary.merge(comments_df, on="MT_CC", how="left")
-    merged["Comments"] = merged["Comments"].fillna("")
-
-    merged.loc[merged["Net_Change"].abs() <= COMMENT_THRESHOLD, "Comments"] = ""
-    merged = merged[[COL_COST_CAT, COL_MT_DOMAIN, "HC_Last", "HC_Current", "Net_Change", "Comments"]]
+    if hc_summary.empty:
+        merged = pd.DataFrame(columns=[COL_COST_CAT, COL_MT_DOMAIN, "HC_Last", "HC_Current", "Net_Change", "Comments"])
+    else:
+        merged = hc_summary.merge(comments_df, on="MT_CC", how="left")
+        merged["Comments"] = merged["Comments"].fillna("")
+        merged.loc[merged["Net_Change"].abs() <= COMMENT_THRESHOLD, "Comments"] = ""
+        merged = merged[[COL_COST_CAT, COL_MT_DOMAIN, "HC_Last", "HC_Current", "Net_Change", "Comments"]]
+        
     merged = sort_cost_cat_mt(merged)
 
     print("Adding totals rows...")
