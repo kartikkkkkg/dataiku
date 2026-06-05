@@ -1,3 +1,10 @@
+This screenshot is incredibly helpful! It shows that your inputs (daily_hc, dailyrollup, lastmonth_hc, mapping, lastmonth_rollup) are configured as **Dataiku Datasets** (indicated by the table grid icon), not Managed Folders.
+This actually makes the code much cleaner. Because Dataiku has already read the Excel files and converted them into Datasets, we no longer need the pd.read_excel() functions or any folder downloading logic. We simply use .get_dataframe() just like your screenshot shows.
+Here is the fully adapted, complete Python Recipe code tailored exactly to the architecture shown in your screenshot.
+### Python Recipe Code (Full & Unabridged)
+Copy and paste this into your Dataiku Python Recipe.
+```python
+# -*- coding: utf-8 -*-
 import os
 import calendar
 from datetime import date, timedelta
@@ -11,26 +18,8 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 import dataiku
 
 # ==========================================
-# DATAIKU FOLDER CONFIGURATION
+# CONSTANTS & CONFIG
 # ==========================================
-# Replace these with the actual IDs of your Managed Folders in Dataiku
-INPUT_FOLDER_NAME = "HC_Raw_Files"
-OUTPUT_FOLDER_NAME = "HC_Output_Reports"
-
-raw_folder = dataiku.Folder(INPUT_FOLDER_NAME)
-out_folder = dataiku.Folder(OUTPUT_FOLDER_NAME)
-
-# ==========================================
-# CONFIG
-# ==========================================
-CURRENT_HC_FILENAME = "Headcount Details Report (Actuals) - HR without PRB,Non-HR.xlsx" 
-LAST_HC_FILENAME = "hc_mayend.xlsx"
-LAST_ROLLUP_FILENAME = "rollup_mayend.xlsx"
-CURRENT_ROLLUP_FILENAME = "HR Analytics (Headcount Rollup).xlsx"
-MAPPING_FILENAME = "mapping.xlsx"
-
-MAPPING_SHEET_NAME = "mapping"
-ROLLUP_SHEET_NAME = "rollup"
 OUTPUT_SHEET_NAME = "New_summary"
 
 # Column names in HC files
@@ -100,24 +89,18 @@ def is_agency_worker(emp_type: str) -> bool:
     s = emp_type.lower()
     return "agency" in s and "worker" in s
 
-def load_excel_from_folder(filename, sheet=0, usecols=None, header=0):
-    """Helper to read Excel directly from Dataiku Managed Folder"""
-    with raw_folder.get_download_stream(filename) as f:
-        return pd.read_excel(f, sheet_name=sheet, usecols=usecols, header=header)
-
-def load_mapping_frames():
-    mapping = load_excel_from_folder(MAPPING_FILENAME, sheet=MAPPING_SHEET_NAME)
-
-    bf_map = mapping[
+def process_mapping_df(mapping_df: pd.DataFrame):
+    bf_map = mapping_df[
         [COL_MAP_BF_L6, COL_COST_CAT, COL_MT_DOMAIN, COL_MT1_DOMAIN]
     ].drop_duplicates()
 
-    emp_map = mapping[[COL_MAP_EMP_TYP, COL_CONTR]].drop_duplicates()
+    emp_map = mapping_df[[COL_MAP_EMP_TYP, COL_CONTR]].drop_duplicates()
 
     return bf_map, emp_map
 
-def load_rollup_from_abc(filename) -> pd.DataFrame:
-    rollup = load_excel_from_folder(filename, usecols=[2, 16], header=0)
+def process_rollup_df(rollup_df: pd.DataFrame) -> pd.DataFrame:
+    # Mimics usecols=[2, 16] from original read_excel
+    rollup = rollup_df.iloc[:, [2, 16]].copy()
     rollup.columns = [COL_ROLLUP_ID, COL_ROLLUP_GBF]
     rollup[COL_ROLLUP_ID] = rollup[COL_ROLLUP_ID].astype(str).str.strip()
     return rollup.dropna(subset=[COL_ROLLUP_ID])
@@ -167,23 +150,13 @@ def build_snapshot(df: pd.DataFrame, suffix: str) -> pd.DataFrame:
 # ==========================================
 # MOVEMENTS + COMMENTS
 # ==========================================
-
 def classify_movements(
     combined: pd.DataFrame, rollup_ids: set, rollup_gbf_map: dict
 ) -> pd.DataFrame:
     rows = []
 
     def add_move(
-        bank_id,
-        mt_cc,
-        cost_cat,
-        mt_domain,
-        movement,
-        fte,
-        emp_type,
-        contr_side,
-        from_mt_cc=None,
-        to_mt_cc=None,
+        bank_id, mt_cc, cost_cat, mt_domain, movement, fte, emp_type, contr_side, from_mt_cc=None, to_mt_cc=None,
     ):
         if pd.isna(fte) or fte == 0:
             return
@@ -210,138 +183,51 @@ def classify_movements(
 
         mt_cc_last = r.get("MT_CC_last")
         mt_cc_curr = r.get("MT_CC_curr")
-
         cost_last = r.get(f"{COL_COST_CAT}_last")
         cost_curr = r.get(f"{COL_COST_CAT}_curr")
-
         mt_last = r.get(f"{COL_MT_DOMAIN}_last")
         mt_curr = r.get(f"{COL_MT_DOMAIN}_curr")
-
         fte_last = r.get(f"{COL_FTE}_last")
         fte_curr = r.get(f"{COL_FTE}_curr")
-
         emp_last = r.get(f"{COL_EMP_TYPE_HC}_last")
         emp_curr = r.get(f"{COL_EMP_TYPE_HC}_curr")
-
         contr_last = r.get("ContrFlag_last")
         contr_curr = r.get("ContrFlag_curr")
 
         if has_curr and not has_last:
-            if bid in rollup_ids:
-                movement = "Non TnO Joiners"
-            else:
-                movement = "New Joiners"
-
-            add_move(
-                bid,
-                mt_cc_curr,
-                cost_curr,
-                mt_curr,
-                movement,
-                fte_curr,
-                emp_curr,
-                contr_curr,
-            )
+            movement = "Non TnO Joiners" if bid in rollup_ids else "New Joiners"
+            add_move(bid, mt_cc_curr, cost_curr, mt_curr, movement, fte_curr, emp_curr, contr_curr)
 
         elif has_last and not has_curr:
             new_gbf = rollup_gbf_map.get(bid)
-
             if new_gbf:
                 add_move(
-                    bank_id=bid,
-                    mt_cc=mt_cc_last,
-                    cost_cat=cost_last,
-                    mt_domain=mt_last,
-                    movement="TnO Leavers",
-                    fte=fte_last,
-                    emp_type=emp_last,
-                    contr_side=contr_last,
-                    to_mt_cc=new_gbf, 
+                    bank_id=bid, mt_cc=mt_cc_last, cost_cat=cost_last, mt_domain=mt_last, movement="TnO Leavers",
+                    fte=fte_last, emp_type=emp_last, contr_side=contr_last, to_mt_cc=new_gbf, 
                 )
             else:
                 add_move(
-                    bid,
-                    mt_cc_last,
-                    cost_last,
-                    mt_last,
-                    "Left Bank",
-                    fte_last,
-                    emp_last,
-                    contr_last,
+                    bid, mt_cc_last, cost_last, mt_last, "Left Bank", fte_last, emp_last, contr_last,
                 )
 
         elif has_last and has_curr:
             same_mtcc = mt_cc_last == mt_cc_curr
-
             if same_mtcc:
-                if (
-                    contr_last == CONTR_VALUE_NON_CONT
-                    and contr_curr == CONTR_VALUE_CONT
-                ):
-                    add_move(
-                        bid,
-                        mt_cc_curr,
-                        cost_curr,
-                        mt_curr,
-                        "Conversion in",
-                        fte_curr,
-                        emp_curr,
-                        contr_curr,
-                    )
-                elif (
-                    contr_last == CONTR_VALUE_CONT
-                    and contr_curr == CONTR_VALUE_NON_CONT
-                ):
-                    add_move(
-                        bid,
-                        mt_cc_curr,
-                        cost_curr,
-                        mt_curr,
-                        "Conversion out",
-                        fte_curr,
-                        emp_curr,
-                        contr_curr,
-                    )
+                if contr_last == CONTR_VALUE_NON_CONT and contr_curr == CONTR_VALUE_CONT:
+                    add_move(bid, mt_cc_curr, cost_curr, mt_curr, "Conversion in", fte_curr, emp_curr, contr_curr)
+                elif contr_last == CONTR_VALUE_CONT and contr_curr == CONTR_VALUE_NON_CONT:
+                    add_move(bid, mt_cc_curr, cost_curr, mt_curr, "Conversion out", fte_curr, emp_curr, contr_curr)
             else:
                 add_move(
-                    bid,
-                    mt_cc_last,
-                    cost_last,
-                    mt_last,
-                    "Transfer out",
-                    fte_last,
-                    emp_last,
-                    contr_last,
-                    from_mt_cc=None,
-                    to_mt_cc=mt_cc_curr,
+                    bid, mt_cc_last, cost_last, mt_last, "Transfer out", fte_last, emp_last, contr_last, from_mt_cc=None, to_mt_cc=mt_cc_curr,
                 )
                 add_move(
-                    bid,
-                    mt_cc_curr,
-                    cost_curr,
-                    mt_curr,
-                    "Transfer in",
-                    fte_curr,
-                    emp_curr,
-                    contr_curr,
-                    from_mt_cc=mt_cc_last,
-                    to_mt_cc=None,
+                    bid, mt_cc_curr, cost_curr, mt_curr, "Transfer in", fte_curr, emp_curr, contr_curr, from_mt_cc=mt_cc_last, to_mt_cc=None,
                 )
 
     if not rows:
         return pd.DataFrame(
-            columns=[
-                COL_BANK_ID,
-                "MT_CC",
-                COL_COST_CAT,
-                COL_MT_DOMAIN,
-                "Movement",
-                "FTE",
-                "EmpType",
-                "ContrSide",
-                "From_MT_CC",
-                "To_MT_CC",
-            ]
+            columns=[COL_BANK_ID, "MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement", "FTE", "EmpType", "ContrSide", "From_MT_CC", "To_MT_CC"]
         )
 
     return pd.DataFrame(rows)
@@ -361,127 +247,59 @@ def build_comments_for_controllable(movements: pd.DataFrame) -> pd.DataFrame:
     totals = df.groupby(
         ["MT_CC", COL_COST_CAT, COL_MT_DOMAIN, "Movement"], as_index=False
     ).agg(
-        Total_FTE=("FTE", "sum"),
-        AW_FTE=("AW_FTE", "sum"),
-        FTE_FTE=("FTE_FTE", "sum"),
+        Total_FTE=("FTE", "sum"), AW_FTE=("AW_FTE", "sum"), FTE_FTE=("FTE_FTE", "sum")
     )
 
-    tin = (
-        df[df["Movement"] == "Transfer in"]
-        .dropna(subset=["From_MT_CC"])
-        .groupby(["MT_CC", "From_MT_CC"], as_index=False)["FTE"]
-        .sum()
-    )
-    tout = (
-        df[df["Movement"] == "Transfer out"]
-        .dropna(subset=["To_MT_CC"])
-        .groupby(["MT_CC", "To_MT_CC"], as_index=False)["FTE"]
-        .sum()
-    )
-    tno_out = (
-        df[df["Movement"] == "TnO Leavers"]
-        .dropna(subset=["To_MT_CC"])
-        .groupby(["MT_CC", "To_MT_CC"], as_index=False)["FTE"]
-        .sum()
-    )
+    tin = df[df["Movement"] == "Transfer in"].dropna(subset=["From_MT_CC"]).groupby(["MT_CC", "From_MT_CC"], as_index=False)["FTE"].sum()
+    tout = df[df["Movement"] == "Transfer out"].dropna(subset=["To_MT_CC"]).groupby(["MT_CC", "To_MT_CC"], as_index=False)["FTE"].sum()
+    tno_out = df[df["Movement"] == "TnO Leavers"].dropna(subset=["To_MT_CC"]).groupby(["MT_CC", "To_MT_CC"], as_index=False)["FTE"].sum()
 
-    tin_dict = defaultdict(list)
+    tin_dict, tout_dict, tno_out_dict = defaultdict(list), defaultdict(list), defaultdict(list)
     for _, r in tin.iterrows():
-        mt_cc = r["MT_CC"]
-        src = r["From_MT_CC"]
-        fte = round(r["FTE"])
-        if fte != 0:
-            tin_dict[mt_cc].append(f"{src}={fte}")
-
-    tout_dict = defaultdict(list)
+        if round(r["FTE"]) != 0: tin_dict[r["MT_CC"]].append(f"{r['From_MT_CC']}={round(r['FTE'])}")
     for _, r in tout.iterrows():
-        mt_cc = r["MT_CC"]
-        dst = r["To_MT_CC"]
-        fte = round(r["FTE"])
-        if fte != 0:
-            tout_dict[mt_cc].append(f"{dst}={fte}")
-
-    tno_out_dict = defaultdict(list)
+        if round(r["FTE"]) != 0: tout_dict[r["MT_CC"]].append(f"{r['To_MT_CC']}={round(r['FTE'])}")
     for _, r in tno_out.iterrows():
-        mt_cc = r["MT_CC"]
-        dest_gbf = r["To_MT_CC"]
-        fte = round(r["FTE"])
-        if fte != 0:
-            tno_out_dict[mt_cc].append(f"{dest_gbf}={fte}")
+        if round(r["FTE"]) != 0: tno_out_dict[r["MT_CC"]].append(f"{r['To_MT_CC']}={round(r['FTE'])}")
 
     movement_order = [
-        "New Joiners",
-        "Non TnO Joiners",
-        "Conversion in",
-        "Transfer in",
-        "TnO Leavers",
-        "Left Bank",
-        "Conversion out",
-        "Transfer out",
+        "New Joiners", "Non TnO Joiners", "Conversion in", "Transfer in", 
+        "TnO Leavers", "Left Bank", "Conversion out", "Transfer out"
     ]
 
     rows = []
-
     for mt_cc, grp in totals.groupby("MT_CC"):
         grp = grp.set_index("Movement")
 
         def vals(m):
-            if m not in grp.index:
-                return 0.0, 0.0, 0.0
+            if m not in grp.index: return 0.0, 0.0, 0.0
             row = grp.loc[m]
             return float(row["Total_FTE"]), float(row["AW_FTE"]), float(row["FTE_FTE"])
 
         lines = []
         for m in movement_order:
             tot, aw, fte = vals(m)
-            tot_r = round(tot)
-            aw_r = round(aw)
-            fte_r = round(fte)
+            tot_r, aw_r, fte_r = round(tot), round(aw), round(fte)
 
             if m == "Transfer in":
                 details = tin_dict.get(mt_cc)
-                if details:
-                    detail_str = "; ".join(details)
-                    line = f"Transfer in = {tot_r} ({detail_str})"
-                else:
-                    line = f"Transfer in = {tot_r}"
-                lines.append(line)
-
+                lines.append(f"Transfer in = {tot_r} ({'; '.join(details)})" if details else f"Transfer in = {tot_r}")
             elif m == "Transfer out":
                 details = tout_dict.get(mt_cc)
-                if details:
-                    detail_str = "; ".join(details)
-                    line = f"Transfer out = {tot_r} ({detail_str})"
-                else:
-                    line = f"Transfer out = {tot_r}"
-                lines.append(line)
-
+                lines.append(f"Transfer out = {tot_r} ({'; '.join(details)})" if details else f"Transfer out = {tot_r}")
             elif m == "TnO Leavers":
                 details = tno_out_dict.get(mt_cc)
-                if details:
-                    line = f"TnO Leavers = {tot_r} ({'; '.join(details)})"
-                else:
-                    line = f"TnO Leavers = {tot_r}"
-                lines.append(line)
-
+                lines.append(f"TnO Leavers = {tot_r} ({'; '.join(details)})" if details else f"TnO Leavers = {tot_r}")
             else:
-                line = f"{m} = {tot_r} (AW = {aw_r} & FTE = {fte_r})"
-                lines.append(line)
+                lines.append(f"{m} = {tot_r} (AW = {aw_r} & FTE = {fte_r})")
 
-        rows.append(
-            {
-                "MT_CC": mt_cc,
-                "Comments": "\n".join(lines),
-            }
-        )
+        rows.append({"MT_CC": mt_cc, "Comments": "\n".join(lines)})
 
     return pd.DataFrame(rows)
-
 
 # ==========================================
 # SUMMARY BUILDING
 # ==========================================
-
 def build_hc_summary_controllable(
     hc_curr: pd.DataFrame, hc_last: pd.DataFrame
 ) -> pd.DataFrame:
@@ -529,16 +347,7 @@ def add_totals_rows(
         label = TOTAL_LABELS.get(cat, f"{cat.upper()} TOTAL")
         pieces.append(
             pd.DataFrame(
-                [
-                    {
-                        COL_COST_CAT: label,
-                        COL_MT_DOMAIN: "",
-                        curr_col: total_curr,
-                        last_col: total_last,
-                        net_col: total_net,
-                        "Comments": "",
-                    }
-                ]
+                [{COL_COST_CAT: label, COL_MT_DOMAIN: "", curr_col: total_curr, last_col: total_last, net_col: total_net, "Comments": ""}]
             )
         )
 
@@ -546,16 +355,7 @@ def add_totals_rows(
     total_last = int(df[last_col].sum())
     total_net = total_curr - total_last
     grand = pd.DataFrame(
-        [
-            {
-                COL_COST_CAT: GRAND_TOTAL_LABEL,
-                COL_MT_DOMAIN: "",
-                curr_col: total_curr,
-                last_col: total_last,
-                net_col: total_net,
-                "Comments": "",
-            }
-        ]
+        [{COL_COST_CAT: GRAND_TOTAL_LABEL, COL_MT_DOMAIN: "", curr_col: total_curr, last_col: total_last, net_col: total_net, "Comments": ""}]
     )
 
     if pieces:
@@ -569,7 +369,6 @@ def add_totals_rows(
 # ==========================================
 # EXCEL FORMATTING
 # ==========================================
-
 def style_professional(output_path):
     wb = load_workbook(output_path)
     ws = wb[OUTPUT_SHEET_NAME]
@@ -578,15 +377,10 @@ def style_professional(output_path):
     header_font = Font(bold=True, size=11)
     wrap_alignment = Alignment(wrap_text=True, vertical="top")
     normal_alignment = Alignment(wrap_text=False, vertical="center")
-    total_fill = PatternFill(
-        start_color="DDDDDD", end_color="DDDDDD", fill_type="solid"
-    )
+    total_fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
 
     thin_border = Border(
-        left=Side(style="thin"),
-        right=Side(style="thin"),
-        top=Side(style="thin"),
-        bottom=Side(style="thin"),
+        left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"),
     )
 
     total_labels = set(TOTAL_LABELS.values()) | {GRAND_TOTAL_LABEL}
@@ -612,7 +406,6 @@ def style_professional(output_path):
             comments_text = ws.cell(row=row, column=comments_col_idx).value
 
         has_comments = isinstance(comments_text, str) and comments_text.strip() != ""
-
         ws.row_dimensions[row].height = 18
 
         if comments_col_idx is not None:
@@ -660,7 +453,6 @@ def style_professional(output_path):
 # ==========================================
 # HTML TABLE FOR EMAIL
 # ==========================================
-
 def build_html_table_from_summary(
     df: pd.DataFrame, curr_label: str, last_label: str
 ) -> str:
@@ -672,40 +464,15 @@ def build_html_table_from_summary(
             df_html["Comments"].astype(str).replace("nan", "").str.replace("\n", "<br>")
         )
 
-    col_order = [
-        "COST CAT",
-        "MT DOMAIN",
-        last_label,
-        curr_label,
-        "Net Change",
-        "Comments",
-    ]
+    col_order = ["COST CAT", "MT DOMAIN", last_label, curr_label, "Net Change", "Comments"]
     col_order = [c for c in col_order if c in df_html.columns]
     df_html = df_html[col_order]
 
-    table_style = (
-        "border-collapse:collapse;"
-        "font-family:Calibri,Arial,sans-serif;"
-        "font-size:11px;"
-    )
-    th_style = (
-        "border:1px solid #999999;"
-        "padding:4px 6px;"
-        "background-color:#F0F0F0;"
-        "font-weight:bold;"
-        "text-align:center;"
-    )
-    td_base = "border:1px solid #999999;" "padding:4px 6px;" "vertical-align:top;"
+    table_style = "border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:11px;"
+    th_style = "border:1px solid #999999;padding:4px 6px;background-color:#F0F0F0;font-weight:bold;text-align:center;"
+    td_base = "border:1px solid #999999;padding:4px 6px;vertical-align:top;"
 
-    col_widths = {
-        "COST CAT": 90,
-        "MT DOMAIN": 120,
-        curr_label: 70,
-        last_label: 70,
-        "Net Change": 70,
-        "Comments": 260,
-    }
-
+    col_widths = {"COST CAT": 90, "MT DOMAIN": 120, curr_label: 70, last_label: 70, "Net Change": 70, "Comments": 260}
     total_labels = set(TOTAL_LABELS.values())
     grand_label = GRAND_TOTAL_LABEL
 
@@ -721,30 +488,20 @@ def build_html_table_from_summary(
         costcat = str(row.get("COST CAT", ""))
 
         if costcat == grand_label:
-            row_bg = "#D0D0D0"
-            row_weight = "bold"
+            row_bg, row_weight = "#D0D0D0", "bold"
         elif costcat in total_labels:
-            row_bg = "#E0E0E0"
-            row_weight = "bold"
+            row_bg, row_weight = "#E0E0E0", "bold"
         else:
-            row_bg = "#FFFFFF"
-            row_weight = "normal"
+            row_bg, row_weight = "#FFFFFF", "normal"
 
         html.append("<tr>")
         for col in col_order:
             val = row[col]
             val = "" if pd.isna(val) or val is None else str(val)
-            if val == "nan":
-                val = ""
+            if val == "nan": val = ""
             
             style = td_base + f"background-color:{row_bg};font-weight:{row_weight};"
-
-            if col in (curr_label, last_label, "Net Change"):
-                style += "text-align:center;"
-            elif col in ("Comments",):
-                style += "text-align:left;"
-            else:
-                style += "text-align:left;"
+            style += "text-align:center;" if col in (curr_label, last_label, "Net Change") else "text-align:left;"
 
             html.append(f'<td style="{style}">{val}</td>')
         html.append("</tr>")
@@ -752,140 +509,133 @@ def build_html_table_from_summary(
     html.append("</table>")
     return "\n".join(html)
 
+
 # ==========================================
-# MAIN
+# MAIN EXECUTION
 # ==========================================
-print("Loading mapping & rollup...")
-bf_map, emp_map = load_mapping_frames()
-
-rollup = load_rollup_from_abc(CURRENT_ROLLUP_FILENAME)
-
-rollup_gbf_map = (
-    rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
-    .dropna(subset=[COL_ROLLUP_ID])
-    .assign(**{COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID].astype(str).str.strip()})
-    .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
-    .to_dict()
-)
-
-print("Loading HC files from raw/ ...")
-hc_curr_raw = load_excel_from_folder(CURRENT_HC_FILENAME)
-hc_last_raw = load_excel_from_folder(LAST_HC_FILENAME)
-
-print("Applying mappings to HC...")
-hc_curr = apply_mappings_to_hc(hc_curr_raw, bf_map, emp_map)
-hc_last = apply_mappings_to_hc(hc_last_raw, bf_map, emp_map)
-
-print("Building snapshots...")
-snap_curr = build_snapshot(hc_curr, "curr")
-snap_last = build_snapshot(hc_last, "last")
-
-print("Loading rollups...")
-last_rollup = load_rollup_from_abc(LAST_ROLLUP_FILENAME)
-curr_rollup = load_rollup_from_abc(CURRENT_ROLLUP_FILENAME)
-
-last_rollup_gbf_map = (
-    last_rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
-    .dropna(subset=[COL_ROLLUP_ID])
-    .assign(**{COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID].astype(str).str.strip()})
-    .drop_duplicates(subset=[COL_ROLLUP_ID])
-    .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
-    .to_dict()
-)
-
-curr_rollup_gbf_map = (
-    curr_rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
-    .dropna(subset=[COL_ROLLUP_ID])
-    .assign(**{COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID].astype(str).str.strip()})
-    .drop_duplicates(subset=[COL_ROLLUP_ID])
-    .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
-    .to_dict()
-)
-
-print("Combining snapshots...")
-combined = snap_last.merge(
-    snap_curr,
-    on=COL_BANK_ID,
-    how="outer",
-    suffixes=("_last", "_curr"),
-)
-
-print("Classifying movements...")
-movements = classify_movements(combined, set(last_rollup_gbf_map.keys()), curr_rollup_gbf_map)
-
-print("Building comments...")
-comments_df = build_comments_for_controllable(movements)
-
-print("Building HC summary (controllable)...")
-hc_summary = build_hc_summary_controllable(hc_curr, hc_last)
-
-print("Merging summary with comments...")
-merged = hc_summary.merge(comments_df, on="MT_CC", how="left")
-merged["Comments"] = merged["Comments"].fillna("")
-
-merged.loc[merged["Net_Change"].abs() <= COMMENT_THRESHOLD, "Comments"] = ""
-
-merged = merged[
-    [COL_COST_CAT, COL_MT_DOMAIN, "HC_Last", "HC_Current", "Net_Change", "Comments"]
-]
-
-merged = sort_cost_cat_mt(merged)
-
-print("Adding totals rows...")
-merged_with_totals = add_totals_rows(
-    merged,
-    curr_col="HC_Current",
-    last_col="HC_Last",
-    net_col="Net_Change",
-)
-
-curr_label, last_label = get_date_labels()
-
-merged_with_totals.rename(
-    columns={
-        "HC_Current": curr_label,
-        "HC_Last": last_label,
-        "Net_Change": "Net Change",
-        COL_COST_CAT: "COST CAT",
-        COL_MT_DOMAIN: "MT DOMAIN",
-    },
-    inplace=True,
-)
-
-# ---------------------------------------------------------
-# WRITE FILE TO TEMPORARY OS PATH & UPLOAD TO MANAGED FOLDER
-# ---------------------------------------------------------
-file_label = curr_label.replace("-", "")
-filename = f"HC_{file_label}.xlsx"
-temp_output_path = f"/tmp/{filename}"
-
-print("Writing temp output Excel...")
-merged_with_totals.to_excel(temp_output_path, sheet_name=OUTPUT_SHEET_NAME, index=False)
-
-print("Applying Excel formatting...")
-style_professional(temp_output_path)
-
-print("Uploading styled Excel to Output Managed Folder...")
-with open(temp_output_path, "rb") as f:
-    out_folder.upload_stream(filename, f)
+def main():
+    print("Reading Recipe Inputs from Dataiku Datasets...")
+    daily_hc_df = dataiku.Dataset("daily_hc").get_dataframe()
+    dailyrollup_df = dataiku.Dataset("dailyrollup").get_dataframe()
+    lastmonth_hc_df = dataiku.Dataset("lastmonth_hc").get_dataframe()
+    mapping_df = dataiku.Dataset("mapping").get_dataframe()
+    lastmonth_rollup_df = dataiku.Dataset("lastmonth_rollup").get_dataframe()
     
-# Clean up temp file
-os.remove(temp_output_path)
+    # Initialize Output Folder exactly as shown in screenshot
+    HC_Output_Reports = dataiku.Folder("SatdiEQ1")
 
-# ---------------------------------------------------------
-# PREPARE HTML & PASS TO DATAIKU SCENARIO VARIABLES
-# ---------------------------------------------------------
-print("Preparing HTML email table...")
-html_table = build_html_table_from_summary(merged_with_totals, curr_label, last_label)
+    print("Processing mappings...")
+    bf_map, emp_map = process_mapping_df(mapping_df)
 
-client = dataiku.api_client()
-project = client.get_default_project()
-variables = project.get_variables()
+    print("Processing Rollups...")
+    curr_rollup = process_rollup_df(dailyrollup_df)
+    rollup_gbf_map = (
+        curr_rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
+        .assign(**{COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID].astype(str).str.strip()})
+        .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
+        .to_dict()
+    )
 
-# Store variables to be picked up by the Scenario step
-variables["standard"]["HTML_EMAIL_TABLE"] = html_table
-variables["standard"]["REPORT_DATE"] = curr_label
+    last_rollup = process_rollup_df(lastmonth_rollup_df)
+    last_rollup_gbf_map = (
+        last_rollup[[COL_ROLLUP_ID, COL_ROLLUP_GBF]]
+        .assign(**{COL_ROLLUP_ID: lambda x: x[COL_ROLLUP_ID].astype(str).str.strip()})
+        .drop_duplicates(subset=[COL_ROLLUP_ID])
+        .set_index(COL_ROLLUP_ID)[COL_ROLLUP_GBF]
+        .to_dict()
+    )
 
-project.set_variables(variables)
+    print("Applying mappings to HC data...")
+    hc_curr = apply_mappings_to_hc(daily_hc_df, bf_map, emp_map)
+    hc_last = apply_mappings_to_hc(lastmonth_hc_df, bf_map, emp_map)
 
-print("Done. Variables injected into project. Handing over to Scenario for email.")
+    print("Building snapshots...")
+    snap_curr = build_snapshot(hc_curr, "curr")
+    snap_last = build_snapshot(hc_last, "last")
+
+    print("Combining snapshots...")
+    combined = snap_last.merge(
+        snap_curr,
+        on=COL_BANK_ID,
+        how="outer",
+        suffixes=("_last", "_curr"),
+    )
+
+    print("Classifying movements...")
+    movements = classify_movements(combined, set(last_rollup_gbf_map.keys()), rollup_gbf_map)
+
+    print("Building comments...")
+    comments_df = build_comments_for_controllable(movements)
+
+    print("Building HC summary (controllable)...")
+    hc_summary = build_hc_summary_controllable(hc_curr, hc_last)
+
+    print("Merging summary with comments...")
+    merged = hc_summary.merge(comments_df, on="MT_CC", how="left")
+    merged["Comments"] = merged["Comments"].fillna("")
+
+    merged.loc[merged["Net_Change"].abs() <= COMMENT_THRESHOLD, "Comments"] = ""
+    merged = merged[[COL_COST_CAT, COL_MT_DOMAIN, "HC_Last", "HC_Current", "Net_Change", "Comments"]]
+    merged = sort_cost_cat_mt(merged)
+
+    print("Adding totals rows...")
+    merged_with_totals = add_totals_rows(
+        merged,
+        curr_col="HC_Current",
+        last_col="HC_Last",
+        net_col="Net_Change",
+    )
+
+    curr_label, last_label = get_date_labels()
+    merged_with_totals.rename(
+        columns={
+            "HC_Current": curr_label,
+            "HC_Last": last_label,
+            "Net_Change": "Net Change",
+            COL_COST_CAT: "COST CAT",
+            COL_MT_DOMAIN: "MT DOMAIN",
+        },
+        inplace=True,
+    )
+
+    # ---------------------------------------------------------
+    # EXPORT TO DATAIKU MANAGED FOLDER
+    # ---------------------------------------------------------
+    file_label = curr_label.replace("-", "")
+    filename = f"HC_{file_label}.xlsx"
+    temp_path = f"/tmp/{filename}" # Save to Dataiku temporary OS space first
+
+    print(f"Writing temporary Excel file to {temp_path}...")
+    merged_with_totals.to_excel(temp_path, sheet_name=OUTPUT_SHEET_NAME, index=False)
+
+    print("Applying Excel formatting...")
+    style_professional(temp_path)
+
+    print("Uploading styled Excel to Output Managed Folder...")
+    with open(temp_path, "rb") as f:
+        HC_Output_Reports.upload_stream(filename, f)
+        
+    # Clean up temp file
+    os.remove(temp_path)
+    
+    # ---------------------------------------------------------
+    # PASS HTML TABLE TO SCENARIO VARIABLES
+    # ---------------------------------------------------------
+    print("Generating HTML Email Table...")
+    html_table = build_html_table_from_summary(merged_with_totals, curr_label, last_label)
+    
+    client = dataiku.api_client()
+    project = client.get_default_project()
+    variables = project.get_variables()
+    
+    # These variables will be consumed by the Scenario step to send the email
+    variables["standard"]["HTML_EMAIL_TABLE"] = html_table
+    variables["standard"]["REPORT_DATE"] = curr_label
+    project.set_variables(variables)
+
+    print("Process Complete. HTML table passed to project variables for Email Scenario.")
+
+if __name__ == "__main__":
+    main()
+
+```
