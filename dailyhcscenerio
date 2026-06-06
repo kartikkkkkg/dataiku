@@ -1,3 +1,12 @@
+It is hilarious that the raw code printed, but it proves the pipeline is 100% connected!
+
+The API parameter in Dataiku requires a specific capitalization. The correct argument is `sendAsHTML=True` (with "HTML" fully capitalized).
+
+Here is the exact corrected code for your Scenario Step 2, with the email addresses completely removed for your privacy:
+
+### Updated Scenario Python Code
+
+```python
 import dataiku
 from dataiku.scenario import Scenario
 
@@ -11,8 +20,8 @@ html_table = variables.get("HTML_EMAIL_TABLE", "<p>Error: Table not generated</p
 report_date = variables.get("REPORT_DATE", "Today")
 
 # Email Configuration
-EMAIL_TO = "kartik.om"  
-SENDER_EMAIL = "kartik.
+EMAIL_TO = "recipient@example.com"  
+SENDER_EMAIL = "sender@example.com" 
 SUBJECT = f"Daily Headcount | {report_date}"
 
 body_html = f"""
@@ -26,13 +35,15 @@ print(f"Triggering email for {report_date} from Scenario...")
 try:
     # Uses the primary 'mail' channel ID
     sender = scenario.get_message_sender("mail")
-    # -> Added as_html=True to render the table properly
-    sender.send(sender=SENDER_EMAIL, recipient=EMAIL_TO, subject=SUBJECT, message=body_html, as_html=True)
+    # FIXED: The correct Dataiku parameter is sendAsHTML=True
+    sender.send(sender=SENDER_EMAIL, recipient=EMAIL_TO, subject=SUBJECT, message=body_html, sendAsHTML=True)
     print("Email sent successfully via 'mail' channel.")
 except Exception as e:
     print(f"Primary channel failed: {e}. Trying backup channel...")
     # Uses the backup 'fdmi-smtp' channel
     sender = scenario.get_message_sender("fdmi-smtp")
-    # -> Added as_html=True to render the table properly
-    sender.send(sender=SENDER_EMAIL, recipient=EMAIL_TO, subject=SUBJECT, message=body_html, as_html=True)
+    # FIXED: The correct Dataiku parameter is sendAsHTML=True
+    sender.send(sender=SENDER_EMAIL, recipient=EMAIL_TO, subject=SUBJECT, message=body_html, sendAsHTML=True)
     print("Email sent successfully via 'fdmi-smtp' channel.")
+
+```
