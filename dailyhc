@@ -55,10 +55,11 @@ COMMENT_THRESHOLD = 10
 # ==========================================
 def get_date_labels():
     today = date.today()
+    
+    # 1. Current Date: Strictly today - 1 day (no weekend skipping)
     curr_date = today - timedelta(days=1)
-    while curr_date.weekday() >= 5:
-        curr_date -= timedelta(days=1)
 
+    # 2. Last Month End Date: Strictly the real last day of the previous month
     if curr_date.month == 1:
         last_month = 12
         year = curr_date.year - 1
@@ -69,9 +70,7 @@ def get_date_labels():
     last_day = calendar.monthrange(year, last_month)[1]
     last_month_end = date(year, last_month, last_day)
 
-    while last_month_end.weekday() >= 5:
-        last_month_end -= timedelta(days=1)
-
+    # Format labels (e.g., "5-Jun", "31-May")
     curr_label = curr_date.strftime("%d-%b").lstrip("0")
     last_label = last_month_end.strftime("%d-%b").lstrip("0")
 
@@ -647,46 +646,20 @@ def main():
     os.remove(temp_path)
     
     # ---------------------------------------------------------
-    # SEND HTML EMAIL DIRECTLY FROM RECIPE
+    # PASS HTML TABLE TO SCENARIO VARIABLES
     # ---------------------------------------------------------
     print("Generating HTML Email Table...")
     html_table = build_html_table_from_summary(merged_with_totals, curr_label, last_label)
     
     client = dataiku.api_client()
     project = client.get_default_project()
+    variables = project.get_variables()
     
-    # Email Configuration
-    EMAIL_TO = "sample.email@example.com"
-    SUBJECT = f"Daily Headcount | {curr_label}"
-    
-    body_html = f"""
-    <p>Hi all,<br>
-    PFB Headcount as of {curr_label}</p>
-    {html_table}
-    """
-    
-    print("Sending email directly from Python...")
-    try:
-        sender = project.get_message_sender("mail")
-        sender.send(
-            sender=EMAIL_TO,
-            recipient=EMAIL_TO,
-            subject=SUBJECT,
-            message=body_html
-        )
-        print("Mail sent successfully via 'mail' channel.")
-    except Exception as e:
-        print(f"Primary channel failed: {e}. Trying backup channel...")
-        sender = project.get_message_sender("fdmi-smtp")
-        sender.send(
-            sender=EMAIL_TO,
-            recipient=EMAIL_TO,
-            subject=SUBJECT,
-            message=body_html
-        )
-        print("Mail sent successfully via 'fdmi-smtp' channel.")
+    variables["standard"]["HTML_EMAIL_TABLE"] = html_table
+    variables["standard"]["REPORT_DATE"] = curr_label
+    project.set_variables(variables)
 
-    print("Process Complete!")
+    print("Process Complete. HTML table passed to project variables for Email Scenario.")
 
 if __name__ == "__main__":
     main()
