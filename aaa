@@ -1,0 +1,113 @@
+Yes. I can now read the logic.
+
+Since you want the FG report to behave exactly like the JR Dataiku formula, the only part you need to change is the IN NEW JOINER section inside final_status().
+
+⸻
+
+1. Add your parsed NJ dataset
+
+Immediately after this:
+
+joined = dataiku.Dataset("FG_JR_prepared_joined_joined_joined_prepared_joined_prepared_prepared_joined").get_dataframe()
+
+add:
+
+# Parsed New Joiner dataset
+nj = dataiku.Dataset("YOUR_PARSED_NJ_DATASET_NAME").get_dataframe()
+
+Replace
+
+YOUR_PARSED_NJ_DATASET_NAME
+
+with the actual dataset name that has the parsed Effective Date.
+
+⸻
+
+2. After cleaning the key columns add this block
+
+Put this immediately after the for col in key_cols: loop finishes.
+
+# ==========================================================
+# PREPARE NEW JOINER DATA
+# ==========================================================
+nj["Position ID"] = (
+    nj["Position ID"]
+    .astype(str)
+    .str.replace(".0", "", regex=False)
+    .str.strip()
+)
+nj["Effective Date"] = pd.to_datetime(
+    nj["Effective Date"],
+    errors="coerce"
+).dt.normalize()
+today = pd.Timestamp.today().normalize()
+future_nj = (
+    nj[nj["Effective Date"] >= today][["Position ID"]]
+    .drop_duplicates()
+)
+future_nj["Check in NJ"] = "In New Joiner"
+joined = joined.merge(
+    future_nj,
+    on="Position ID",
+    how="left"
+)
+
+⸻
+
+3. Replace ONLY this section
+
+Currently you have
+
+# ---------------------------------------------------------
+# IN NEW JOINER
+# ---------------------------------------------------------
+if str(row.get("Check in NJ","")).strip() == "In New Joiner":
+    return "Excl - in new joiner"
+
+Delete it completely.
+
+Replace with
+
+# ---------------------------------------------------------
+# IN NEW JOINER
+# ---------------------------------------------------------
+if str(row.get("Check in NJ", "")).strip() == "In New Joiner":
+    return "Excl - in new joiner"
+
+Yes—it looks identical.
+
+The difference is that now Check in NJ is being created from the parsed Effective Date dataset, not from the previous join.
+
+⸻
+
+What this now does
+
+A FG record will be excluded only if
+
+* Position ID exists in the parsed NJ dataset
+* Effective Date is today or later
+* Position IDs match
+
+Exactly the same behaviour as the Dataiku formula you showed earlier:
+
+New Joiner Date != "Not in New Joiner"
+AND
+New Joiner Date >= today
+
+⸻
+
+Dataset names
+
+You now have three datasets:
+
+raw = dataiku.Dataset("FG_JR_prepared").get_dataframe()
+joined = dataiku.Dataset("FG_JR_prepared_joined_joined_joined_prepared_joined_prepared_prepared_joined").get_dataframe()
+nj = dataiku.Dataset("YOUR_PARSED_NJ_DATASET_NAME").get_dataframe()
+
+Replace only:
+
+YOUR_PARSED_NJ_DATASET_NAME
+
+with the exact parsed NJ dataset name from your Flow.
+
+If you tell me the exact parsed NJ dataset name (or send one screenshot of it in the Flow), I’ll insert it directly into the code so you can paste it into Dataiku without changing anything.
