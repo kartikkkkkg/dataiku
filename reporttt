@@ -2,35 +2,35 @@
 
 import dataiku
 import pandas as pd
-import numpy as np
 from datetime import datetime
 
-# ============================================================
-# READ INPUT DATASET
-# ============================================================
+# ==========================================================
+# READ INPUT
+# ==========================================================
 
 REPORTT = dataiku.Dataset("REPORTT")
 df = REPORTT.get_dataframe()
 
-# ============================================================
-# DYNAMIC DATE HEADERS
-# ============================================================
+# ==========================================================
+# DYNAMIC HEADERS
+# ==========================================================
 
 today = datetime.today()
 
-fte_header = today.strftime("%d-%b-%y")        # 16-Jul-26
-los_header = today.strftime("%d %b LoS")       # 16 Jul LoS
+fte_header = today.strftime("%d-%b-%y")
+los_header = today.strftime("%d %b LoS")
 
-df.rename(columns={
+df = df.rename(columns={
     "FTE_sum": fte_header,
     "Curr Date LOS": los_header
-}, inplace=True)
+})
 
-# ============================================================
+# ==========================================================
 # NUMERIC COLUMNS
-# ============================================================
+# ==========================================================
 
 numeric_cols = [
+
     fte_header,
     "Employees",
     "Agency Workers",
@@ -48,15 +48,25 @@ numeric_cols = [
     "CP-26 vs LoS",
     "30Jun WFP Outlook vs LoS",
     "JRs+Vacant Positions"
+
 ]
 
 for c in numeric_cols:
-    if c in df.columns:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-# ============================================================
-# GROUP DEFINITIONS
-# ============================================================
+    if c in df.columns:
+
+        df[c] = (
+            pd.to_numeric(
+                df[c],
+                errors="coerce"
+            )
+            .fillna(0)
+            .round(1)
+        )
+
+# ==========================================================
+# HIERARCHY
+# ==========================================================
 
 OPS = [
     "Ops CIB",
@@ -83,44 +93,57 @@ COO_CHILDREN = [
     "Governance"
 ]
 
-CIO = [
-    "COO",
-    "Gp Mgmt",
-    "GBS"
-]
-
-# ============================================================
-# RESULT LIST
-# ============================================================
+# ==========================================================
+# OUTPUT
+# ==========================================================
 
 rows = []
 
 
-# ============================================================
+# ==========================================================
 # HELPER FUNCTIONS
-# ============================================================
+# ==========================================================
 
-def sum_numeric(data):
+def sum_values(data):
     """
-    Sum all numeric columns in a dataframe.
+    Sum every numeric column.
     """
-    result = {}
+
+    totals = {}
 
     for col in numeric_cols:
-        if col in data.columns:
-            result[col] = data[col].sum()
+        totals[col] = data[col].sum()
 
-    return result
+    return totals
 
 
-def add_row(name, cost_cat, values):
+def mt_total(data, mt):
     """
-    Add one row to final output.
+    Return totals of one MT Domain.
+    """
+
+    return sum_values(
+        data[data["MT Domain"] == mt]
+    )
+
+
+def group_total(data, mt_list):
+    """
+    Return totals of multiple MT Domains.
+    """
+
+    return sum_values(
+        data[data["MT Domain"].isin(mt_list)]
+    )
+
+
+def append_row(name, values):
+    """
+    Append one row to output.
     """
 
     row = {
-        "MT Domain": name,
-        "Cost Cat": cost_cat
+        "MT Domain": name
     }
 
     for col in numeric_cols:
@@ -129,414 +152,294 @@ def add_row(name, cost_cat, values):
     rows.append(row)
 
 
-def get_mt(mt, data):
+def append_mt(data, mt):
     """
-    Return totals of one MT Domain.
+    Append one MT row.
+    """
+
+    append_row(
+        mt,
+        mt_total(data, mt)
+    )
+
+
+def append_group(data, label, mt_list):
+    """
+    Append subtotal row.
+    """
+
+    append_row(
+        label,
+        group_total(data, mt_list)
+    )
+
+
+def append_coo(data, expand=False):
+    """
+    COO block.
+    """
+
+    # COO Total
+    append_row(
+        "COO",
+        group_total(data, COO_CHILDREN)
+    )
+
+    # Expand only if required
+    if expand:
+
+        for mt in COO_CHILDREN:
+
+            append_row(
+                "    " + mt,
+                mt_total(data, mt)
+            )
+
+
+def append_cio_total(data):
+    """
+    CIO Mgmt Total
     """
 
     temp = data[
-        data["MT Domain"] == mt
+        data["MT Domain"].isin(
+            COO_CHILDREN +
+            ["Gp Mgmt", "GBS"]
+        )
     ]
 
-    return sum_numeric(temp)
+    append_row(
+        "CIO Mgmt Total",
+        sum_values(temp)
+    )
+# ==========================================================
+# TOTAL SECTION
+# ==========================================================
 
+def build_total():
 
-def get_group(mt_list, data):
-    """
-    Return totals of multiple MT Domains.
-    """
+    total_df = df.copy()
 
-    temp = data[
-        data["MT Domain"].isin(mt_list)
-    ]
-
-    return sum_numeric(temp)
-
-
-def create_coo(data):
-    """
-    COO =
-    Risk & Control +
-    Resilience +
-    Delivery +
-    Governance
-    """
-
-    return get_group(COO_CHILDREN, data)
-
-
-def create_ops_total(data):
-    """
-    Ops Total
-    """
-
-    return get_group(OPS, data)
-
-
-def create_tech_total(data):
-    """
-    Tech Total
-    """
-
-    return get_group(TECH, data)
-
-
-def create_cio_total(data):
-    """
-    CIO Mgmt =
-    COO +
-    Gp Mgmt +
-    GBS
-    """
-
-    temp = pd.concat([
-
-        data[data["MT Domain"].isin(COO_CHILDREN)],
-
-        data[data["MT Domain"] == "Gp Mgmt"],
-
-        data[data["MT Domain"] == "GBS"]
-
-    ])
-
-    return sum_numeric(temp)
-
-
-def create_section_total(data):
-    """
-    Grand total of section.
-    """
-
-    return sum_numeric(data)
-
-# ============================================================
-# BUILD TOTAL SECTION
-# ============================================================
-
-# All data
-total_df = df.copy()
-
-# ------------------------------------------------------------
-# TOTAL
-# ------------------------------------------------------------
-
-add_row(
-    "Total",
-    "",
-    create_section_total(total_df)
-)
-
-# ------------------------------------------------------------
-# OPS
-# ------------------------------------------------------------
-
-for mt in OPS:
-
-    add_row(
-        mt,
-        "",
-        get_mt(mt, total_df)
+    # Grand Total
+    append_row(
+        "Total",
+        sum_values(total_df)
     )
 
-# Ops Total
-add_row(
-    "Ops Total",
-    "",
-    create_ops_total(total_df)
+    # ---------------- OPS ----------------
+
+    append_list(
+    total_df,
+    OPS
 )
 
-# ------------------------------------------------------------
-# TECH
-# ------------------------------------------------------------
-
-for mt in TECH:
-
-    add_row(
-        mt,
-        "",
-        get_mt(mt, total_df)
+    append_group(
+        total_df,
+        "Ops Total",
+        OPS
     )
 
-# Tech Total
-add_row(
-    "Tech Total",
-    "",
-    create_tech_total(total_df)
+    # ---------------- TECH ----------------
+
+    append_list(
+    total_df,
+    TECH
 )
 
-# ------------------------------------------------------------
-# COO
-# (Not expanded in Total section)
-# ------------------------------------------------------------
+    append_group(
+        total_df,
+        "Tech Total",
+        TECH
+    )
 
-add_row(
-    "COO",
-    "",
-    create_coo(total_df)
-)
+    # ---------------- COO ----------------
+    # Don't expand in Total
 
-# ------------------------------------------------------------
-# GP MGMT
-# ------------------------------------------------------------
+    append_coo(
+        total_df,
+        expand=False
+    )
 
-add_row(
-    "Gp Mgmt",
-    "",
-    get_mt("Gp Mgmt", total_df)
-)
+    append_mt(total_df, "Gp Mgmt")
+    append_mt(total_df, "GBS")
 
-# ------------------------------------------------------------
-# GBS
-# ------------------------------------------------------------
+# ==========================================================
+# BAU SECTION
+# ==========================================================
 
-add_row(
-    "GBS",
-    "",
-    get_mt("GBS", total_df)
-)
-# ============================================================
-# BUILD BAU SECTION
-# ============================================================
+def build_bau():
 
-bau_df = df[
-    df["Cost Cat"] == "BAU"
-].copy()
+    bau_df = df[df["Cost Cat"] == "BAU"].copy()
 
-# ------------------------------------------------------------
-# BAU TOTAL
-# ------------------------------------------------------------
-
-add_row(
-    "BAU",
-    "BAU",
-    create_section_total(bau_df)
-)
-
-# ------------------------------------------------------------
-# OPS
-# ------------------------------------------------------------
-
-for mt in OPS:
-
-    add_row(
-        mt,
+    # Grand BAU Total
+    append_row(
         "BAU",
-        get_mt(mt, bau_df)
+        sum_values(bau_df)
     )
 
-# Ops Total
+    # ---------------- OPS ----------------
 
-add_row(
-    "Ops Total",
-    "BAU",
-    create_ops_total(bau_df)
+    append_list(
+    bau_df,
+    OPS
 )
 
-# ------------------------------------------------------------
-# TECH
-# ------------------------------------------------------------
-
-for mt in TECH:
-
-    add_row(
-        mt,
-        "BAU",
-        get_mt(mt, bau_df)
+    append_group(
+        bau_df,
+        "Ops Total",
+        OPS
     )
 
-# Tech Total
+    # ---------------- TECH ----------------
 
-add_row(
-    "Tech Total",
-    "BAU",
-    create_tech_total(bau_df)
+    append_list(
+    bau_df,
+    TECH
 )
 
-# ------------------------------------------------------------
-# COO
-# ------------------------------------------------------------
-
-add_row(
-    "COO",
-    "BAU",
-    create_coo(bau_df)
-)
-
-# ------------------------------------------------------------
-# COO CHILDREN
-# ------------------------------------------------------------
-
-for mt in COO_CHILDREN:
-
-    add_row(
-        mt,
-        "BAU",
-        get_mt(mt, bau_df)
+    append_group(
+        bau_df,
+        "Tech Total",
+        TECH
     )
 
-# ------------------------------------------------------------
-# GP MGMT
-# ------------------------------------------------------------
+    
 
-add_row(
-    "Gp Mgmt",
-    "BAU",
-    get_mt("Gp Mgmt", bau_df)
-)
+    # ---------------- COO ----------------
+    # Expand only in BAU
 
-# ------------------------------------------------------------
-# GBS
-# ------------------------------------------------------------
+    append_coo(
+        bau_df,
+        expand=True
+    )
 
-add_row(
-    "GBS",
-    "BAU",
-    get_mt("GBS", bau_df)
-)
+    # ---------------- Gp Mgmt ----------------
 
-# ------------------------------------------------------------
-# CIO MGMT TOTAL
-# ------------------------------------------------------------
+    append_mt(
+        bau_df,
+        "Gp Mgmt"
+    )
 
-add_row(
-    "CIO Mgmt Total",
-    "BAU",
-    create_cio_total(bau_df)
-)
+    # ---------------- GBS ----------------
 
-# ============================================================
-# BUILD PROJECT SECTION
-# ============================================================
+    append_mt(
+        bau_df,
+        "GBS"
+    )
 
-project_df = df[
-    df["Cost Cat"] == "Project"
-].copy()
+    # ---------------- CIO Mgmt Total ----------------
 
-# ------------------------------------------------------------
-# PROJECT TOTAL
-# ------------------------------------------------------------
+    append_cio_total(
+        bau_df
+    )
 
-add_row(
-    "Project",
-    "Project",
-    create_section_total(project_df)
-)
+def append_list(data, mt_list):
+    
+    for mt in mt_list:
 
-# ------------------------------------------------------------
-# OPS
-# ------------------------------------------------------------
+        append_mt(
+            data,
+            mt
+        )
 
-for mt in OPS:
+# ==========================================================
+# PROJECT SECTION
+# ==========================================================
 
-    add_row(
-        mt,
+def build_project():
+
+    project_df = df[
+        df["Cost Cat"] == "Project"
+    ].copy()
+
+    # ------------------------------------------------------
+    # PROJECT TOTAL
+    # ------------------------------------------------------
+
+    append_row(
         "Project",
-        get_mt(mt, project_df)
+        sum_values(project_df)
     )
 
-# Ops Total
+    # ---------------- OPS ----------------
 
-add_row(
-    "Ops Total",
-    "Project",
-    create_ops_total(project_df)
-)
-
-# ------------------------------------------------------------
-# TECH
-# ------------------------------------------------------------
-
-for mt in TECH:
-
-    add_row(
-        mt,
-        "Project",
-        get_mt(mt, project_df)
+    append_list(
+        project_df,
+        OPS
     )
 
-# Tech Total
-
-add_row(
-    "Tech Total",
-    "Project",
-    create_tech_total(project_df)
-)
-
-# ------------------------------------------------------------
-# COO
-# ------------------------------------------------------------
-
-add_row(
-    "COO",
-    "Project",
-    create_coo(project_df)
-)
-
-# ------------------------------------------------------------
-# COO CHILDREN
-# ------------------------------------------------------------
-
-for mt in COO_CHILDREN:
-
-    add_row(
-        mt,
-        "Project",
-        get_mt(mt, project_df)
+    append_group(
+        project_df,
+        "Ops Total",
+        OPS
     )
 
-# ------------------------------------------------------------
-# GP MGMT
-# ------------------------------------------------------------
+    # ---------------- TECH ----------------
 
-add_row(
-    "Gp Mgmt",
-    "Project",
-    get_mt("Gp Mgmt", project_df)
-)
+    append_list(
+        project_df,
+        TECH
+    )
 
-# ------------------------------------------------------------
-# GBS
-# ------------------------------------------------------------
+    append_group(
+        project_df,
+        "Tech Total",
+        TECH
+    )
 
-add_row(
-    "GBS",
-    "Project",
-    get_mt("GBS", project_df)
-)
+    # ---------------- COO ----------------
 
-# ------------------------------------------------------------
-# CIO MGMT TOTAL
-# ------------------------------------------------------------
+    append_coo(
+        project_df,
+        expand=True
+    )
 
-add_row(
-    "CIO Mgmt Total",
-    "Project",
-    create_cio_total(project_df)
-)
+    # ---------------- Gp Mgmt ----------------
 
-# ============================================================
+    append_mt(
+        project_df,
+        "Gp Mgmt"
+    )
+
+    # ---------------- GBS ----------------
+
+    append_mt(
+        project_df,
+        "GBS"
+    )
+
+    # NO CIO MGMT TOTAL HERE
+
+# ==========================================================
+# BUILD REPORT
+# ==========================================================
+
+build_total()
+
+build_bau()
+
+build_project()
+
+# ==========================================================
 # FINAL DATAFRAME
-# ============================================================
+# ==========================================================
 
 final_df = pd.DataFrame(rows)
 
-# ------------------------------------------------------------
-# OPTIONAL
-# Round all numeric columns
-# ------------------------------------------------------------
+# MT Domain first
+cols = ["MT Domain"] + [
+    c for c in final_df.columns
+    if c != "MT Domain"
+]
 
-for c in numeric_cols:
+final_df = final_df[cols]
 
-    if c in final_df.columns:
-
-        final_df[c] = final_df[c].round(2)
-
-# ------------------------------------------------------------
+# ==========================================================
 # WRITE OUTPUT
-# ------------------------------------------------------------
+# ==========================================================
 
 REPORTTT = dataiku.Dataset("REPORTTT")
+
 REPORTTT.write_with_schema(final_df)
 
-print("Done!")
-print(final_df.head(20))
+print(final_df)
