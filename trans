@@ -1,0 +1,89 @@
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd
+import numpy as np
+
+# =============================================================================
+# INPUT DATASETS
+# =============================================================================
+
+report_ds = dataiku.Dataset("HC_REPORT_joined_joined_joined_joineddd_prepared")
+transfer_ds = dataiku.Dataset("Transfers_Prepared_joined_joined_prepared_filtered")
+
+report = report_ds.get_dataframe()
+transfers = transfer_ds.get_dataframe()
+
+# =============================================================================
+# TRANSFER CALCULATION
+# =============================================================================
+
+# ----- TO SIDE -----
+to_df = (
+    transfers.groupby(
+        ["MT Domain (To)", "Cost Cat (To)"],
+        as_index=False
+    )["FTE (To)"]
+    .sum()
+)
+
+to_df.columns = [
+    "MT Domain",
+    "Cost Cat",
+    "FTE_TO"
+]
+
+# ----- FROM SIDE -----
+from_df = (
+    transfers.groupby(
+        ["MT Domain (actual)", "Cost Cat (actual)"],
+        as_index=False
+    )["FTE (From)"]
+    .sum()
+)
+
+from_df.columns = [
+    "MT Domain",
+    "Cost Cat",
+    "FTE_FROM"
+]
+
+# =============================================================================
+# MERGE BOTH
+# =============================================================================
+
+transfer_summary = pd.merge(
+    to_df,
+    from_df,
+    on=["MT Domain", "Cost Cat"],
+    how="outer"
+)
+
+transfer_summary = transfer_summary.fillna(0)
+
+transfer_summary["Net Transfer"] = (
+    transfer_summary["FTE_TO"]
+    - transfer_summary["FTE_FROM"]
+)
+
+# =============================================================================
+# JOIN BACK TO REPORT
+# =============================================================================
+
+rep = report.merge(
+    transfer_summary[[
+        "MT Domain",
+        "Cost Cat",
+        "Net Transfer"
+    ]],
+    on=["MT Domain", "Cost Cat"],
+    how="left"
+)
+
+rep["Net Transfer"] = rep["Net Transfer"].fillna(0)
+
+# =============================================================================
+# WRITE OUTPUT
+# =============================================================================
+
+output = dataiku.Dataset("Rep")
+output.write_with_schema(rep)
