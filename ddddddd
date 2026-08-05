@@ -1,0 +1,76 @@
+# ==============================
+# CREATE BAU / PROJECT / TOTAL ROWS
+# ==============================
+
+# Split BAU (everything except Project) and Project
+bau_df = df[df["Cost Cat"] != "Project"].copy()
+project_df = df[df["Cost Cat"] == "Project"].copy()
+
+# Numeric columns
+num_cols = df.select_dtypes(include="number").columns
+
+# -------- BAU TOTAL --------
+bau_total = {}
+
+for col in df.columns:
+    if col in num_cols:
+        bau_total[col] = bau_df[col].sum()
+    else:
+        bau_total[col] = ""
+
+bau_total["MT Domain"] = "BAU"
+bau_total["Cost Cat"] = ""
+
+bau_total_df = pd.DataFrame([bau_total])
+
+# -------- PROJECT TOTAL --------
+project_total = {}
+
+for col in df.columns:
+    if col in num_cols:
+        project_total[col] = project_df[col].sum()
+    else:
+        project_total[col] = ""
+
+project_total["MT Domain"] = "Project"
+project_total["Cost Cat"] = ""
+
+project_total_df = pd.DataFrame([project_total])
+
+# -------- GRAND TOTAL --------
+grand_total = {}
+
+for col in df.columns:
+    if col in num_cols:
+        grand_total[col] = df[col].sum()
+    else:
+        grand_total[col] = ""
+
+grand_total["MT Domain"] = "Total"
+grand_total["Cost Cat"] = ""
+
+grand_total_df = pd.DataFrame([grand_total])
+
+# Optional blank rows for readability
+blank_row = {c: "" for c in df.columns}
+blank_df = pd.DataFrame([blank_row])
+
+# Final dataset
+df = pd.concat([
+    bau_df,
+    bau_total_df,
+    blank_df,
+    project_df,
+    project_total_df,
+    blank_df,
+    grand_total_df
+], ignore_index=True)
+
+# Re-round numeric columns
+df[num_cols] = df[num_cols].fillna(0).round(1)
+
+# ==============================
+# WRITE OUTPUT
+# ==============================
+
+REPORTTT.write_with_schema(df)
