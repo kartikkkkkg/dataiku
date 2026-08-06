@@ -1,0 +1,103 @@
+Epic
+
+T&O Workforce Management
+
+Feature / User Story
+
+HC MT Dashboard
+
+Description
+
+Develop an automated HC MT Dashboard in Dataiku by integrating multiple workforce data sources, implementing business rules, generating workforce metrics, and producing a standardized dashboard for Workforce Management reporting.
+
+Task 1
+HC Line of Sight
+Description
+
+Develop the HC Line of Sight section of the dashboard by integrating Actual Headcount, Joiners, Transfers, Leavers, Fieldglass, and Job Requisition datasets. Generate Line of Sight metrics and dashboard hierarchy according to business requirements.
+
+Subtasks
+Actual Headcount
+Prepare Actual HC dataset
+Implement MT Domain mapping
+Implement Cost Category mapping
+Calculate Controllable FTE
+Calculate Employees
+Calculate Agency Workers
+Aggregate HC metrics by MT Domain & Cost Category
+New Joiners
+Prepare New Joiners dataset
+Implement Include/Exclude logic
+Validate Effective Date logic
+Calculate New Joiners by MT Domain
+Aggregate New Joiner FTE
+Transfers
+Prepare Transfers dataset
+Implement Same Domain validation
+Implement Same Cost validation
+Implement Prior Month exclusion
+Implement Future Year exclusion
+Aggregate Net Transfers
+Employee Leavers
+Prepare Employee Leavers dataset
+Implement Effective Date validation
+Aggregate Employee Leavers
+Agency Worker Leavers (Fieldglass)
+Prepare Fieldglass dataset
+Implement Position validation
+Implement MOW/MSW exclusion
+Remove duplicate records
+Implement Future New Joiner exclusion
+Aggregate Agency Worker Leavers
+Job Requisitions (JR)
+Prepare JR dataset
+Map Position IDs
+Implement Include/Exclude logic
+Calculate Offers Accepted
+Aggregate JR metrics
+Dashboard Hierarchy
+Implement BAU / Project classification
+Create Total hierarchy
+Create Ops Total hierarchy
+Create Tech Total hierarchy
+Create COO hierarchy
+Expand COO subgroups for BAU and Project
+Generate dashboard output layout
+Validation
+Validate HC metrics
+Validate Joiners
+Validate Transfers
+Validate Leavers
+Validate Fieldglass
+Validate JR
+Reconcile dashboard against Excel
+Unit testing
+Defect fixes
+Task 2
+WFP Outlook
+
+Subtasks:
+
+Prepare WFP source data
+Implement WFP calculations
+Generate WFP Outlook metrics
+Validate WFP output
+Task 3
+CP26 Outlook
+
+Subtasks:
+
+Prepare CP26 data
+Calculate CP26 metrics
+Validate CP26 calculations
+Task 4
+Dashboard Output
+
+Subtasks:
+
+Merge Line of Sight, WFP, and CP26 outputs
+Calculate dashboard variances
+Generate final dashboard dataset
+Excel formatting/output
+UAT support
+Production deployment
