@@ -1,0 +1,429 @@
+I have a historical recruitment dataset containing 1,000+ completed Job Requisitions.
+
+For these historical records, I have the ACTUAL JOINING DATE.
+
+I want to use these historical actual outcomes to CREATE A NEW Proposed Days mapping from scratch.
+
+IMPORTANT:
+
+DO NOT use my existing/current Proposed Days mapping to determine the new values.
+
+The current mapping is NOT required for this analysis.
+
+The objective is to discover the most accurate Proposed Days values directly from historical actual joining dates.
+
+I only want TWO mappings:
+
+1. INDIA
+2. ROW (Rest of World)
+
+Do NOT split India/ROW by Internal or External hiring.
+
+The final mapping must be:
+
+Region + Candidate Progress Status → Proposed Days
+
+==================================================
+
+1. SOURCE DATA
+    ==================================================
+
+Use these columns from my historical dataset:
+
+* Actual Joining Date
+* JR Modified Date
+* Candidate Progress Status
+* Country
+* Job Requisition ID
+
+First identify the exact column names in the workbook.
+
+Do not modify or overwrite the original data.
+
+==================================================
+2. DATA CLEANING
+
+Check the dataset for:
+
+* Missing Actual Joining Date
+* Missing JR Modified Date
+* Missing Candidate Progress Status
+* Missing Country
+* Duplicate Job Requisition IDs
+* Invalid dates
+* Actual Joining Date earlier than JR Modified Date
+
+Report the number of records affected by each issue.
+
+For the analysis, use only records where:
+
+Actual Joining Date is present
+AND
+JR Modified Date is present
+AND
+Candidate Progress Status is present
+AND
+Country is present.
+
+Do not silently delete records.
+
+==================================================
+3. CREATE REGION
+
+Create a Region column.
+
+If Country = India:
+
+Region = India
+
+If Country is anything other than India:
+
+Region = ROW
+
+Do not use Internal Job Watch.
+
+Do not create Internal/External segments.
+
+==================================================
+4. CALCULATE ACTUAL DAYS TO FILL
+
+For every valid historical record calculate:
+
+Actual Days to Fill =
+Actual Joining Date - JR Modified Date
+
+Also calculate:
+
+Actual Joining Year-Month =
+TEXT(Actual Joining Date,“yyyymm”)
+
+This represents the actual month in which the candidate joined.
+
+==================================================
+5. ANALYSE EACH REGION + STATUS
+
+For every combination of:
+
+Region
++
+Candidate Progress Status
+
+calculate:
+
+* Number of records
+* Mean Actual Days to Fill
+* Median Actual Days to Fill
+* Minimum Actual Days
+* Maximum Actual Days
+* P25
+* P75
+
+Do NOT use the mean or median directly as the final Proposed Days.
+
+They are reference statistics only.
+
+==================================================
+6. FIND THE BEST PROPOSED DAYS
+
+For every:
+
+Region + Candidate Progress Status
+
+test different Proposed Days values.
+
+The purpose is to find the Proposed Days value that gives the highest probability of correctly predicting the ACTUAL JOINING MONTH.
+
+For every tested Proposed Days value:
+
+Estimated Joining Date =
+JR Modified Date + Proposed Days
+
+Then:
+
+Estimated Joining Year-Month =
+TEXT(Estimated Joining Date,“yyyymm”)
+
+Compare:
+
+Estimated Joining Year-Month
+
+with:
+
+Actual Joining Year-Month
+
+Create:
+
+Month Correct =
+1 when Estimated Joining Year-Month = Actual Joining Year-Month
+0 otherwise.
+
+Then calculate:
+
+Month Accuracy % =
+SUM(Month Correct) / Number of valid records
+
+The Proposed Days with the highest Month Accuracy % is the candidate optimal Proposed Days.
+
+==================================================
+7. PROPOSED DAYS SEARCH RANGE
+
+For each Region + Candidate Progress Status:
+
+First calculate the Median Actual Days to Fill.
+
+Then test Proposed Days around the historical distribution.
+
+Initially test:
+
+Median - 50 days through Median + 50 days.
+
+Do not allow Proposed Days below 0.
+
+If the actual historical distribution extends beyond this range, expand the search range.
+
+The goal is to ensure that the true optimum is not missed.
+
+==================================================
+8. IMPORTANT — OPTIMIZE JOINING MONTH, NOT EXACT DATE
+
+The PRIMARY objective is:
+
+Estimated Joining Month = Actual Joining Month
+
+Do NOT optimize primarily for exact joining date.
+
+For example:
+
+JR Modified Date = 31-Mar-2026
+
+Actual Joining Date = 05-Jun-2026
+
+If Proposed Days = 67:
+
+Estimated Joining Date = 06-Jun-2026
+
+This should count as CORRECT because both dates are in June 2026.
+
+Therefore:
+
+Month Accuracy = 100% for this record.
+
+==================================================
+9. TIE BREAKING
+
+Sometimes several Proposed Days values may have the same Month Accuracy.
+
+Example:
+
+60 days = 60%
+61 days = 60%
+62 days = 60%
+63 days = 59%
+
+If multiple Proposed Days values have the same highest accuracy:
+
+Use these tie-breakers:
+
+1. Choose the Proposed Days with the lowest Mean Absolute Error between Estimated Joining Date and Actual Joining Date.
+2. If still tied, choose the Proposed Days with the lowest Median Absolute Error.
+3. If still tied, choose the value closest to the historical median Actual Days to Fill.
+
+Do not arbitrarily select a value.
+
+==================================================
+10. SAMPLE SIZE
+
+For every Region + Candidate Progress Status combination, show the number of historical records.
+
+Use these confidence levels:
+
+50 or more records:
+High Confidence
+
+20–49 records:
+Medium Confidence
+
+10–19 records:
+Low Confidence
+
+Less than 10 records:
+Insufficient Sample
+
+For fewer than 10 records, do NOT create a highly specific optimized Proposed Days value.
+
+Instead flag:
+
+“Insufficient Sample”
+
+and recommend using a broader fallback value.
+
+==================================================
+11. STABILITY CHECK
+
+Do not rely only on one Proposed Days value having the highest accuracy.
+
+Check the surrounding Proposed Days values.
+
+For example:
+
+70 days → 58%
+71 days → 59%
+72 days → 59%
+73 days → 59%
+74 days → 58%
+
+This indicates that the result is stable around 71–73 days.
+
+In this situation, choose a reasonable value within the stable range, preferably closer to the historical median.
+
+However, if there is a clear peak, use the clear optimal value.
+
+==================================================
+12. CREATE INDIA MAPPING
+
+Create a sheet:
+
+India_Mapping
+
+Columns:
+
+Candidate Progress Status
+Record Count
+Median Actual Days
+Mean Actual Days
+Optimal Proposed Days
+Month Accuracy %
+Mean Absolute Error
+Median Absolute Error
+Confidence
+Notes
+
+The final production mapping should be:
+
+Candidate Progress Status → Proposed Days
+
+for India.
+
+==================================================
+13. CREATE ROW MAPPING
+
+Create a sheet:
+
+ROW_Mapping
+
+Columns:
+
+Candidate Progress Status
+Record Count
+Median Actual Days
+Mean Actual Days
+Optimal Proposed Days
+Month Accuracy %
+Mean Absolute Error
+Median Absolute Error
+Confidence
+Notes
+
+The final production mapping should be:
+
+Candidate Progress Status → Proposed Days
+
+for ROW.
+
+==================================================
+14. CREATE OPTIMIZATION DETAIL
+
+Create a sheet:
+
+Optimization_Detail
+
+For every Region + Candidate Progress Status, show every Proposed Days value tested.
+
+Columns:
+
+Region
+Candidate Progress Status
+Proposed Days
+Record Count
+Correct Joining Months
+Month Accuracy %
+Mean Absolute Error
+Median Absolute Error
+Rank
+
+This sheet is important because I need to be able to see how the optimal Proposed Days was selected.
+
+==================================================
+15. CREATE OVERALL SUMMARY
+
+Create a sheet:
+
+Overall_Summary
+
+Show:
+
+Region
+Total Records
+Number of Candidate Progress Statuses
+Overall Month Accuracy
+Average Absolute Error
+
+Rows:
+
+India
+ROW
+Overall
+
+Overall Month Accuracy must be calculated as:
+
+Total records where Estimated Joining Month = Actual Joining Month
+/
+Total valid records
+
+Do NOT simply average the individual status-level accuracies.
+
+==================================================
+16. FINAL OUTPUT
+
+At the end, provide two clean production-ready mappings.
+
+INDIA:
+
+Candidate Progress Status → Proposed Days
+
+ROW:
+
+Candidate Progress Status → Proposed Days
+
+For every mapping value also show:
+
+* Record Count
+* Month Accuracy
+* Confidence
+
+==================================================
+17. CRITICAL REQUIREMENT
+
+The current/existing Proposed Days mapping MUST NOT be used to calculate the new mapping.
+
+I want the new Proposed Days values to be derived entirely from:
+
+JR Modified Date
++
+Actual Joining Date
++
+Candidate Progress Status
++
+Region
+
+The historical Actual Joining Date is the ground truth.
+
+The question we are solving is:
+
+“For a given Region and Candidate Progress Status, what number of days added to the JR Modified Date would have historically produced the correct joining month most often?”
+
+That number should become the new Proposed Days.
+
+Do not compare against the old mapping unless I specifically request a comparison later.
+
+Do not use Internal/External segmentation.
