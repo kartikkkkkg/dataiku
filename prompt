@@ -1,0 +1,291 @@
+I have a historical dataset of 1,000+ Job Requisition (JR) records in this Excel workbook.
+
+I want to use the historical actual joining dates to statistically determine the most accurate “Proposed Days to Fill” for each Candidate Progress Status.
+
+The objective is NOT simply to calculate the average number of days.
+
+The objective is to determine the number of proposed days that gives the highest accuracy when predicting the ACTUAL JOINING MONTH.
+
+DATA COLUMNS
+
+The relevant columns are:
+
+* Actual Joining Date
+* Job Requisition ID
+* Candidate Progress Status
+* JR Modified Date
+* Country
+* Internal Job Watch
+
+Additional columns may exist in the workbook. Use them only if they were known at the time the proposed joining date would have been estimated.
+
+Interpret Internal Job Watch as:
+
+* TRUE = Internal hiring
+* FALSE = External hiring
+
+For geography:
+
+* Country = India → India
+* Any country other than India → ROW (Rest of World)
+
+STEP 1 — DATA VALIDATION
+
+First inspect the dataset and report:
+
+1. Total number of records.
+2. Number of records with missing Actual Joining Date.
+3. Number of records with missing JR Modified Date.
+4. Number of records with missing Candidate Progress Status.
+5. Number of records with missing Country.
+6. Number of records with missing Internal Job Watch.
+7. Number of duplicate Job Requisition IDs.
+8. Any invalid or inconsistent dates.
+9. Any Candidate Progress Status values that appear to be duplicates because of spelling, capitalization, spaces, or minor naming differences.
+
+Do NOT silently modify the source data.
+
+Create a cleaned/calculation layer or additional columns instead.
+
+STEP 2 — CALCULATE ACTUAL DAYS TO FILL
+
+For every valid historical record calculate:
+
+Actual Days to Fill =
+Actual Joining Date - JR Modified Date
+
+Do not round the result.
+
+Also calculate:
+
+Actual Joining Month =
+MONTH(Actual Joining Date)
+
+Actual Joining Year =
+YEAR(Actual Joining Date)
+
+Actual Joining Year-Month =
+YEAR(Actual Joining Date) + MONTH(Actual Joining Date)
+
+Also create:
+
+Geography =
+IF(Country = “India”, “India”, “ROW”)
+
+Hiring Type =
+IF(Internal Job Watch = TRUE, “Internal”, “External”)
+
+STEP 3 — CREATE THE FOUR SEGMENTS
+
+Every record must belong to exactly one of these four segments:
+
+1. India + Internal
+2. India + External
+3. ROW + Internal
+4. ROW + External
+
+Do not combine these four segments when calculating the final proposed-day mappings.
+
+STEP 4 — ANALYSE HISTORICAL ACTUAL DAYS
+
+For every combination of:
+
+Segment + Candidate Progress Status
+
+calculate:
+
+* Number of records
+* Mean Actual Days to Fill
+* Median Actual Days to Fill
+* Minimum Actual Days
+* Maximum Actual Days
+* P25
+* P75
+* Standard deviation
+
+The median is important because outliers should not disproportionately influence the proposed days.
+
+STEP 5 — DETERMINE THE OPTIMAL PROPOSED DAYS
+
+For every:
+
+Segment + Candidate Progress Status
+
+test different Proposed Days values.
+
+For example, test integer values from 0 to 240 days, or a wider range if the historical data shows that some statuses require more than 240 days.
+
+For each candidate Proposed Days value calculate:
+
+Estimated Joining Date =
+JR Modified Date + Proposed Days
+
+Then calculate:
+
+Estimated Joining Month =
+MONTH(Estimated Joining Date)
+
+Estimated Joining Year =
+YEAR(Estimated Joining Date)
+
+Estimated Joining Year-Month =
+YEAR(Estimated Joining Date) + MONTH(Estimated Joining Date)
+
+Compare Estimated Joining Year-Month against Actual Joining Year-Month.
+
+Define:
+
+Month Accurate =
+TRUE if Estimated Joining Year-Month = Actual Joining Year-Month
+FALSE otherwise.
+
+Then calculate:
+
+Month Accuracy % =
+Number of Month Accurate records / Total records
+
+The PRIMARY objective is:
+
+MAXIMIZE MONTH ACCURACY.
+
+Therefore, select the Proposed Days value that produces the highest historical joining-month accuracy for that Segment + Candidate Progress Status combination.
+
+STEP 6 — TIE-BREAKING RULE
+
+If multiple Proposed Days values produce the same highest month accuracy, use the following tie-breakers in this order:
+
+1. Lowest Mean Absolute Error in days between Estimated Joining Date and Actual Joining Date.
+2. Lowest Median Absolute Error in days.
+3. Prefer the value closest to the historical median Actual Days to Fill.
+
+Do not arbitrarily choose a value.
+
+STEP 7 — AVOID OVERFITTING
+
+Because the same historical data is being used to determine the proposed days, do not rely only on in-sample accuracy.
+
+Where practical, divide the historical records into:
+
+* 70% training data
+* 30% validation/test data
+
+Use the training data to determine the optimal Proposed Days.
+
+Then apply those Proposed Days to the validation/test data and calculate the actual joining-month accuracy.
+
+Report BOTH:
+
+* Training accuracy
+* Validation/Test accuracy
+
+If there are too few records for a particular Segment + Candidate Progress Status combination, clearly flag it as LOW SAMPLE SIZE.
+
+Use a minimum sample-size threshold of 10 records where possible.
+
+For combinations with fewer than 10 records, do not create an unreliable highly specific mapping. Instead flag them and recommend using the appropriate fallback mapping based on the broader segment.
+
+STEP 8 — CREATE FOUR FINAL MAPPING TABLES
+
+Create four separate mapping tables.
+
+MAPPING 1 — INDIA INTERNAL
+
+Columns:
+
+Candidate Progress Status
+Record Count
+Current Proposed Days
+Median Actual Days
+Optimal Proposed Days
+Training Month Accuracy %
+Validation/Test Month Accuracy %
+Mean Absolute Error
+Median Absolute Error
+Sample Size Flag
+
+MAPPING 2 — INDIA EXTERNAL
+
+Use the same columns.
+
+MAPPING 3 — ROW INTERNAL
+
+Use the same columns.
+
+MAPPING 4 — ROW EXTERNAL
+
+Use the same columns.
+
+STEP 9 — CURRENT VS NEW MAPPING
+
+The workbook may already contain a current Proposed Days mapping.
+
+Compare the current mapping against the newly optimized mapping.
+
+For each of the four segments calculate:
+
+* Current mapping month accuracy
+* New mapping month accuracy
+* Improvement in percentage points
+* Current average absolute error
+* New average absolute error
+* Current median absolute error
+* New median absolute error
+
+I want to know whether the new mapping actually improves prediction accuracy.
+
+STEP 10 — OVERALL RESULTS
+
+Create an Overall Summary table:
+
+Segment | Records | Current Month Accuracy | New Month Accuracy | Improvement | Current MAE | New MAE
+
+The four segments should be:
+
+India + Internal
+India + External
+ROW + Internal
+ROW + External
+
+Also calculate the overall accuracy across all four segments.
+
+STEP 11 — IMPORTANT INTERPRETATION
+
+Do NOT assume that the optimal Proposed Days must equal the mean or median Actual Days.
+
+The Proposed Days must be selected based primarily on the ability to correctly predict the Actual Joining Month.
+
+For example:
+
+If a status has a median Actual Days of 83 but 62 Proposed Days produces better joining-month accuracy, then 62 should be considered the better Proposed Days value.
+
+STEP 12 — FINAL RECOMMENDATION
+
+At the end, provide a clean final output containing exactly four production-ready mappings:
+
+INDIA + INTERNAL
+Candidate Progress Status → Proposed Days
+
+INDIA + EXTERNAL
+Candidate Progress Status → Proposed Days
+
+ROW + INTERNAL
+Candidate Progress Status → Proposed Days
+
+ROW + EXTERNAL
+Candidate Progress Status → Proposed Days
+
+Also provide the validation/test month accuracy for each mapping.
+
+Do not overwrite my original data or existing mapping.
+
+Create new sheets for:
+
+1. Data_Analysis
+2. India_Internal_Mapping
+3. India_External_Mapping
+4. ROW_Internal_Mapping
+5. ROW_External_Mapping
+6. Accuracy_Comparison
+7. Overall_Summary
+
+Use the exact Candidate Progress Status values from the source data unless two values are clearly the same status due only to formatting/spelling differences. If you identify possible duplicates, show them separately first and ask for confirmation before merging them.
